@@ -9,8 +9,14 @@ import sys
 import subprocess
 import time
 import json
+import traceback
 
 PAYLOAD_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Add lib directory to Python path
+_lib_path = os.path.join(PAYLOAD_DIR, 'lib')
+if os.path.exists(_lib_path) and _lib_path not in sys.path:
+    sys.path.insert(0, _lib_path)
 
 # Font paths
 FONTS_DIR = os.path.join(PAYLOAD_DIR, 'resources', 'fonts')
@@ -31,7 +37,23 @@ LOGS_DIR = os.path.join(DATA_DIR, "logs")
 CREDS_DIR = os.path.join(DATA_DIR, "output", "crackedpwd")
 STOLEN_DIR = os.path.join(DATA_DIR, "output", "data_stolen")
 
-from pagerctl import Pager
+# Try to import pagerctl with error handling
+try:
+    from pagerctl import Pager
+except Exception as e:
+    # Log the error to a file since we can't use the display yet
+    error_log = os.path.join(PAYLOAD_DIR, 'pagerctl_error.log')
+    with open(error_log, 'w') as f:
+        f.write(f"Failed to import pagerctl: {e}\n")
+        f.write(f"PAYLOAD_DIR: {PAYLOAD_DIR}\n")
+        f.write(f"libpagerctl.so exists: {os.path.exists(os.path.join(PAYLOAD_DIR, 'libpagerctl.so'))}\n")
+        f.write(f"pagerctl.py exists: {os.path.exists(os.path.join(PAYLOAD_DIR, 'pagerctl.py'))}\n")
+        f.write(f"sys.path: {sys.path}\n")
+        f.write(f"Traceback:\n")
+        traceback.print_exc(file=f)
+    print(f"ERROR: Failed to import pagerctl: {e}")
+    print(f"See {error_log} for details")
+    sys.exit(1)
 
 # Theme colors
 TITLE_COLOR = Pager.rgb(100, 200, 255)

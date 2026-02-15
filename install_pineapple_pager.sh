@@ -342,13 +342,21 @@ fi
 RAGNAR_PAGERCTL="${RAGNAR_DIR}/libpagerctl.so"
 BJORN_PAGERCTL="${RAGNAR_DIR}/../pineapple_pager_bjorn/payloads/user/reconnaissance/pager_bjorn/libpagerctl.so"
 
+copy_pagerctl() {
+    local src="$1"
+    # Copy to payload root (where pagerctl.py looks for it)
+    cp "${src}" "${PAYLOAD_STAGE}/"
+    # Also copy to lib/ for LD_LIBRARY_PATH fallback
+    cp "${src}" "${PAYLOAD_STAGE}/lib/" 2>/dev/null || true
+}
+
 if [ -f "$RAGNAR_PAGERCTL" ]; then
     log "INFO" "Copying libpagerctl.so from Ragnar..."
-    cp "${RAGNAR_PAGERCTL}" "${PAYLOAD_STAGE}/"
+    copy_pagerctl "${RAGNAR_PAGERCTL}"
     log "SUCCESS" "Copied libpagerctl.so (Pager display library)"
 elif [ -f "$BJORN_PAGERCTL" ]; then
     log "INFO" "Copying libpagerctl.so from pineapple_pager_bjorn..."
-    cp "${BJORN_PAGERCTL}" "${PAYLOAD_STAGE}/"
+    copy_pagerctl "${BJORN_PAGERCTL}"
     log "SUCCESS" "Copied libpagerctl.so (Pager display library)"
 elif [ "$PAGERCTL_SOURCE" = "pager" ]; then
     # Copy from an existing payload on the Pager
@@ -356,6 +364,7 @@ elif [ "$PAGERCTL_SOURCE" = "pager" ]; then
     PAGER_LIB_PATH=$(ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "find /root/payloads -name 'libpagerctl.so' 2>/dev/null | head -1")
     if [ -n "$PAGER_LIB_PATH" ]; then
         scp $SSH_OPTS "${PAGER_USER}@${PAGER_IP}:${PAGER_LIB_PATH}" "${PAYLOAD_STAGE}/"
+        cp "${PAYLOAD_STAGE}/libpagerctl.so" "${PAYLOAD_STAGE}/lib/" 2>/dev/null || true
         log "SUCCESS" "Copied libpagerctl.so from Pager"
     fi
 else
