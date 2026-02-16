@@ -158,7 +158,34 @@ class SSHConnector:
             finally:
                 ssh.close()
 
+    @staticmethod
+    def _get_local_ips():
+        """Get all IP addresses belonging to this machine."""
+        local_ips = {'127.0.0.1', '::1'}
+        try:
+            hostname = socket.gethostname()
+            for info in socket.getaddrinfo(hostname, None):
+                local_ips.add(info[4][0])
+        except socket.gaierror:
+            pass
+        # Also try the common netifaces approach via ip command
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['hostname', '-I'], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                local_ips.update(result.stdout.strip().split())
+        except Exception:
+            pass
+        return local_ips
+
     def run_bruteforce(self, adresse_ip, port):
+        # Skip brute-forcing our own machine
+        if adresse_ip in self._get_local_ips():
+            logger.info(f"Skipping SSH bruteforce on {adresse_ip} (this is our own machine)")
+            return False, []
+
         self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
 
         # Reset trackers for a fresh run on this host
@@ -181,10 +208,14 @@ class SSHConnector:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
             task_id = progress.add_task("[cyan]Bruteforcing SSH...", total=total_tasks)
 
-            for user, password in cred_list:
+            for i, (user, password) in enumerate(cred_list):
                 if self.shared_data.orchestrator_should_exit:
                     logger.info("Orchestrator exit signal received, stopping bruteforce.")
                     break
+
+                # Cooldown between attempts to avoid overwhelming SSH daemon
+                if i > 0:
+                    time.sleep(1)
 
                 if self.ssh_connect(adresse_ip, user, password):
                     entry = [mac_address, adresse_ip, hostname, user, password, port]
