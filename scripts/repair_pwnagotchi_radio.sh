@@ -35,18 +35,35 @@ echo "[INFO] Using data interface: $DATA_IFACE"
 echo "[INFO] Using monitor interface: $MONITOR_IFACE"
 
 update_config_value() {
-    local key="$1"
+    local dotted_key="$1"
     local value="$2"
     if [[ ! -f "$CONFIG_FILE" ]]; then
         echo "[WARN] $CONFIG_FILE does not exist; creating it."
         mkdir -p "$(dirname "$CONFIG_FILE")"
-        printf '%s\n' "main.name = \"RagnarPwn\"" > "$CONFIG_FILE"
+        cat >"$CONFIG_FILE" <<CFGEOF
+[main]
+name = "RagnarPwn"
+CFGEOF
     fi
-    if grep -Eq "^${key}[[:space:]]*=" "$CONFIG_FILE"; then
-        sed -i "s|^${key}[[:space:]]*=.*|$key = \"$value\"|" "$CONFIG_FILE"
-    else
-        echo "$key = \"$value\"" >> "$CONFIG_FILE"
-    fi
+    # Use Python + tomlkit to safely update TOML table-style configs
+    python3 -c "
+import tomlkit, sys
+key_path = '${dotted_key}'.split('.')
+val = '${value}'
+with open('${CONFIG_FILE}', 'r') as f:
+    doc = tomlkit.parse(f.read())
+d = doc
+for k in key_path[:-1]:
+    if k not in d:
+        d[k] = tomlkit.table()
+    d = d[k]
+d[key_path[-1]] = val
+with open('${CONFIG_FILE}', 'w') as f:
+    f.write(tomlkit.dumps(doc))
+" 2>/dev/null || {
+        # Fallback: append as flat dotted key if tomlkit unavailable
+        echo "$dotted_key = \"$value\"" >> "$CONFIG_FILE"
+    }
 }
 
 update_config_value "main.iface" "$DATA_IFACE"

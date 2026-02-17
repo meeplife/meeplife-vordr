@@ -24,7 +24,11 @@ import subprocess
 import threading
 import traceback
 from datetime import datetime
-from PIL import Image, ImageFont 
+try:
+    from PIL import Image, ImageFont
+except ImportError:
+    Image = None
+    ImageFont = None
 from logger import Logger
 from epd_helper import EPDHelper
 from db_manager import get_db
@@ -994,6 +998,9 @@ class SharedData:
 
     def load_fonts(self):
         """Load the fonts."""
+        if ImageFont is None:
+            logger.info("PIL not available - skipping font loading (Pager uses file paths)")
+            return
         try:
             logger.info("Loading fonts...")
             self.font_arial14 = self.load_font('Arial.ttf', 14)
@@ -1008,6 +1015,8 @@ class SharedData:
 
     def load_font(self, font_name, size):
         """Load a font."""
+        if ImageFont is None:
+            return None
         try:
             return ImageFont.truetype(os.path.join(self.fontdir, font_name), size)
         except Exception as e:
@@ -1109,8 +1118,9 @@ class SharedData:
 
 
     def load_image(self, image_path):
-
         """Load an image."""
+        if Image is None:
+            return None
         try:
             if not os.path.exists(image_path):
                 logger.warning(f"Warning: {image_path} does not exist.")
@@ -1144,7 +1154,18 @@ class SharedData:
             self.imagegen = None
 
     def wrap_text(self, text, font, max_width):
-        """Wrap text to fit within a specified width when rendered."""
+        """Wrap text to fit within a specified width when rendered.
+        On Pager, this is monkey-patched by PagerRagnar.setup_pager_shared_data()
+        to use character-based wrapping instead of PIL fonts."""
+        if font is None or ImageFont is None:
+            # Fallback: character-based wrapping (no PIL)
+            lines = []
+            for line in text.split('\n'):
+                while len(line) > 40:
+                    lines.append(line[:40])
+                    line = line[40:]
+                lines.append(line)
+            return lines
         try:
             lines = []
             words = text.split()

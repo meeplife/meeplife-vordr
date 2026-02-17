@@ -14,7 +14,7 @@
 </table>
 </p>
 
-Ragnar is a « Tamagotchi like » sophisticated, autonomous network scanning, vulnerability assessment, and offensive security tool designed to run on a Raspberry Pi equipped with a 2.13-inch e-Paper HAT—or as a headless/server install on Debian-based systems (AMD64/ARM/ARM64) with Ethernet-first connectivity. On servers with 8GB+ RAM, Ragnar unlocks advanced capabilities including real-time traffic analysis and enhanced vulnerability assessment. This document provides a detailed explanation of the project.
+Ragnar is a « Tamagotchi like » sophisticated, autonomous network scanning, vulnerability assessment, and offensive security tool designed to run on a Raspberry Pi equipped with a 2.13-inch e-Paper HAT, a headless/server install on Debian-based systems (AMD64/ARM/ARM64) with Ethernet-first connectivity, or on the **WiFi Pineapple Pager** with full-color LCD display. On servers with 8GB+ RAM, Ragnar unlocks advanced capabilities including real-time traffic analysis and enhanced vulnerability assessment. This document provides a detailed explanation of the project.
 
 The fastest way to install Ragnar is using the automatic installation script :
 
@@ -23,6 +23,7 @@ The fastest way to install Ragnar is using the automatic installation script :
 wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
 sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
 # On Raspberry Pi you'll be asked if an e-Paper HAT is attached; on other hardware it auto-selects server (headless) mode with LAN-first networking.
+# Option 3 deploys to a WiFi Pineapple Pager via SSH.
 # It may take a while as many packages and modules will be installed. Reboot when it finishes.
 ```
 
@@ -94,6 +95,7 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
   - System monitoring and configuration
   - Hardware profile auto-detection for optimal performance
 - **E-Paper Display**: Real-time status display showing targets, vulnerabilities, credentials, and network info including IP address.
+- **WiFi Pineapple Pager Support**: Full-color LCD display with button controls, LED status indicators, graphical menus, and auto-dim for battery saving. Runs as a native Pager payload.
 - **Comprehensive Logging**: All nmap commands and their results are automatically logged to `data/logs/nmap.log` for audit trails and troubleshooting.
 
 <p align="center">
@@ -129,8 +131,17 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
   - Parallel scanning capabilities
   - Enhanced threat detection
 
-Ragnar is built for 64 bit trixie and 
-Waveshare 2.13inch E-Paper Display HAT V4 for 32 bit system i recommend using Ragnars son [Bjorn](https://github.com/infinition/Bjorn) 
+Ragnar is built for 64 bit trixie and
+Waveshare 2.13inch E-Paper Display HAT V4 for 32 bit system i recommend using Ragnars son [Bjorn](https://github.com/infinition/Bjorn)
+
+### 📋 Prerequisites for WiFi Pineapple Pager
+
+- WiFi Pineapple Pager (firmware 1.0.7+)
+- PAGERCTL payload installed on the Pager
+- Network connection for first-run dependency installation (Python3, nmap)
+- SSH access to the Pager from your workstation
+- [pineapple_pager_bjorn](https://github.com/brAinphreAk/pineapple_pager_bjorn) cloned alongside Ragnar (provides MIPS-compiled Python libraries)
+
 
 #### Reccomendation
 - In nano, edit ~/.config/labwc/autostart and comment out the line
@@ -146,14 +157,15 @@ The fastest way to install Ragnar is using the automatic installation script :
 # Download and run the installer
 wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
 sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
-# On Raspberry Pi you'll be asked if an e-Paper HAT is attached; on other hardware it auto-selects server (headless) mode.
+# On Raspberry Pi: choose between e-Paper HAT, server/headless, or Pineapple Pager deployment.
+# On other hardware: choose between server install or Pineapple Pager deployment.
 # It may take a while as many packages and modules will be installed. Reboot when it finishes.
 ```
 
-**Installer intelligence (new):**
+**Installer intelligence:**
 - Auto-detects distro/package manager (apt, dnf, pacman, zypper) and CPU arch to install the right package names.
 - **Debian System Support**: Full compatibility with Debian-based distributions on ARM, ARM64, and AMD64 architectures.
-- Profiles: **Pi + e-Paper** (display enabled) or **Server/Headless** (no display, modern web UI only). Non-Pi hardware defaults to Server/Headless.
+- Profiles: **Pi + e-Paper** (display enabled), **Server/Headless** (no display, modern web UI only), or **WiFi Pineapple Pager** (full-color LCD). Non-Pi hardware defaults to Server/Headless.
 - **Automatic Advanced Tools**: Systems with 8GB+ RAM automatically install advanced features during fresh setup—no prompts, fully automatic.
 - **Smart Resource Management**: Pi Zero W/W2 automatically skip advanced tools due to hardware limitations.
 - Server installs supported on AMD64/ARM64/ARMv7 with LAN-first networking; USB-gadget steps are skipped automatically off-Pi.
@@ -178,6 +190,47 @@ Want to keep Ragnar online while occasionally hopping into Pwnagotchi mode? A bu
   - Status, phase, and service health also show up on the Discovered tab card once the installer has finished, so you can monitor swaps while reviewing loot.
 
 When you schedule a switch to Pwnagotchi, the dashboard warns that Ragnar's web API will go offline until you reboot or trigger the return flow. Plan for SSH access before swapping.
+
+### 🍍 WiFi Pineapple Pager
+
+Ragnar can be deployed to the **WiFi Pineapple Pager** as a native payload with full-color LCD display, button controls, and LED status indicators. This brings autonomous network reconnaissance to a pocket-sized form factor.
+
+**Features on Pager:**
+- Full-color 480x222 LCD with Viking-themed status display
+- Physical button controls (navigate menus, pause/resume, adjust brightness)
+- LED indicators showing scan status (blue=idle, cyan=scanning, red=brute force, yellow=stealing)
+- Graphical startup menu with interface selection and Web UI toggle
+- Auto-dim screen to save battery
+- Payload handoff support (switch between Ragnar and other Pager payloads)
+- Web interface at `http://<pager-ip>:8000` when enabled
+
+**Installation:**
+
+Option A — From the main installer (select option 3):
+```bash
+sudo ./install_ragnar.sh
+# Choose: 3. Install on WiFi Pineapple Pager
+# Enter Pager IP (default: 172.16.42.1)
+```
+
+Option B — Direct deployment:
+```bash
+./install_pineapple_pager.sh [pager-ip]
+```
+
+**Requirements:**
+- WiFi Pineapple Pager with firmware 1.0.7+
+- PAGERCTL payload installed (provides `libpagerctl.so`)
+- Python3 + nmap on the Pager (auto-installed on first run)
+- SSH access to the Pager
+- Bundled Python libraries from [pineapple_pager_bjorn](https://github.com/brAinphreAk/pineapple_pager_bjorn) (copied automatically if cloned alongside Ragnar)
+
+**Usage on Pager:**
+1. Launch from Pager menu: **Reconnaissance > PagerRagnar**
+2. Press **GREEN** to confirm the splash screen
+3. Select network interface and toggle Web UI on/off
+4. Press **GREEN** on "Start Ragnar" to begin scanning
+5. Press **RED** while running to open the pause menu (brightness control, main menu, exit)
 
 ## ⚡ Quick Start
 

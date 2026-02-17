@@ -1236,7 +1236,8 @@ main() {
         echo -e "${BLUE}Installation profile:${NC}"
         echo "1. Install on Raspberry Pi with e-Paper"
         echo "2. Server install (headless, auto-detect packages, no e-Paper)"
-        read -p "Choose an option (1/2): " profile_choice
+        echo "3. Install on WiFi Pineapple Pager"
+        read -p "Choose an option (1/2/3): " profile_choice
 
         case $profile_choice in
             1)
@@ -1254,19 +1255,73 @@ main() {
                 RAGNAR_ENTRYPOINT="headlessRagnar.py"
                 log "INFO" "Server install selected on Raspberry Pi hardware"
                 ;;
+            3)
+                log "INFO" "WiFi Pineapple Pager installation selected"
+                echo ""
+                echo -e "${BLUE}This will package and deploy Ragnar to your Pineapple Pager.${NC}"
+                echo -e "${YELLOW}Make sure your Pager is connected and accessible via SSH.${NC}"
+                echo ""
+                read -p "Enter Pager IP address [172.16.42.1]: " pager_ip
+                pager_ip="${pager_ip:-172.16.42.1}"
+
+                pager_exit_code=0
+                if [ -f "$ragnar_PATH/install_pineapple_pager.sh" ]; then
+                    chmod +x "$ragnar_PATH/install_pineapple_pager.sh"
+                    bash "$ragnar_PATH/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
+                elif [ -f "$(dirname "$0")/install_pineapple_pager.sh" ]; then
+                    chmod +x "$(dirname "$0")/install_pineapple_pager.sh"
+                    bash "$(dirname "$0")/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
+                else
+                    log "ERROR" "install_pineapple_pager.sh not found"
+                    log "INFO" "Run it directly: ./install_pineapple_pager.sh $pager_ip"
+                    pager_exit_code=1
+                fi
+                clean_exit $pager_exit_code
+                ;;
             *)
                 log "ERROR" "Invalid option selected"
                 clean_exit 1
                 ;;
         esac
     else
-        # Non-Pi hardware defaults to server install with auto-detect
-        SERVER_INSTALL=true
-        HEADLESS_MODE=true
-        HEADLESS_VARIANT="server"
-        HEADLESS_VARIANT_LABEL="Server install"
-        RAGNAR_ENTRYPOINT="headlessRagnar.py"
-        log "INFO" "Non-Raspberry hardware detected; using server install profile"
+        echo -e "${BLUE}Installation profile:${NC}"
+        echo "1. Server install (headless, auto-detect packages, no e-Paper)"
+        echo "2. Install on WiFi Pineapple Pager"
+        read -p "Choose an option (1/2): " profile_choice
+
+        case $profile_choice in
+            1)
+                SERVER_INSTALL=true
+                HEADLESS_MODE=true
+                HEADLESS_VARIANT="server"
+                HEADLESS_VARIANT_LABEL="Server install"
+                RAGNAR_ENTRYPOINT="headlessRagnar.py"
+                log "INFO" "Server install profile selected"
+                ;;
+            2)
+                log "INFO" "WiFi Pineapple Pager installation selected"
+                echo ""
+                echo -e "${BLUE}This will package and deploy Ragnar to your Pineapple Pager.${NC}"
+                echo -e "${YELLOW}Make sure your Pager is connected and accessible via SSH.${NC}"
+                echo ""
+                read -p "Enter Pager IP address [172.16.42.1]: " pager_ip
+                pager_ip="${pager_ip:-172.16.42.1}"
+
+                pager_exit_code=0
+                if [ -f "$(dirname "$0")/install_pineapple_pager.sh" ]; then
+                    chmod +x "$(dirname "$0")/install_pineapple_pager.sh"
+                    bash "$(dirname "$0")/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
+                else
+                    log "ERROR" "install_pineapple_pager.sh not found"
+                    pager_exit_code=1
+                fi
+                clean_exit $pager_exit_code
+                ;;
+            *)
+                log "ERROR" "Invalid option selected"
+                clean_exit 1
+                ;;
+        esac
     fi
 
     # Only attempt e-paper setup when not in server/headless profile

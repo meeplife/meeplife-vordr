@@ -5,10 +5,15 @@ Prevents system hangs by monitoring and limiting resource usage
 """
 
 import os
-import psutil
 import logging
 import time
 from logger import Logger
+
+try:
+    import psutil
+    _HAS_PSUTIL = True
+except ImportError:
+    _HAS_PSUTIL = False
 
 logger = Logger(name="resource_monitor", level=logging.INFO)
 
@@ -32,23 +37,29 @@ class ResourceMonitor:
         
     def get_memory_usage(self):
         """Get current memory usage percentage"""
+        if not _HAS_PSUTIL:
+            return 0
         try:
             mem = psutil.virtual_memory()
             return mem.percent
         except Exception as e:
             self.logger.error(f"Error getting memory usage: {e}")
             return 0
-    
+
     def get_cpu_usage(self):
         """Get current CPU usage percentage (1 second average)"""
+        if not _HAS_PSUTIL:
+            return 0
         try:
             return psutil.cpu_percent(interval=1)
         except Exception as e:
             self.logger.error(f"Error getting CPU usage: {e}")
             return 0
-    
+
     def get_available_memory_mb(self):
         """Get available memory in MB"""
+        if not _HAS_PSUTIL:
+            return 999
         try:
             mem = psutil.virtual_memory()
             return mem.available / (1024 * 1024)
@@ -140,26 +151,33 @@ class ResourceMonitor:
     
     def get_system_status(self):
         """Get comprehensive system status"""
+        if not _HAS_PSUTIL:
+            return {
+                'memory': {'percent': 0, 'status': 'ok', 'total_mb': 0, 'available_mb': 999, 'used_mb': 0},
+                'cpu': {'percent': 0, 'status': 'ok'},
+                'processes': 0, 'threads': 0,
+                'healthy': True
+            }
         try:
             mem = psutil.virtual_memory()
             cpu_percent = psutil.cpu_percent(interval=0.5)
-            
+
             # Get process count
             process_count = len(psutil.pids())
-            
+
             # Get thread count (current process)
             try:
                 thread_count = psutil.Process().num_threads()
             except:
                 thread_count = 0
-            
+
             status = {
                 'memory': {
                     'total_mb': mem.total / (1024 * 1024),
                     'available_mb': mem.available / (1024 * 1024),
                     'used_mb': mem.used / (1024 * 1024),
                     'percent': mem.percent,
-                    'status': self._get_status_level(mem.percent, 
+                    'status': self._get_status_level(mem.percent,
                                                      self.memory_warning_threshold,
                                                      self.memory_critical_threshold)
                 },
@@ -173,9 +191,9 @@ class ResourceMonitor:
                 'threads': thread_count,
                 'healthy': self.is_system_healthy()
             }
-            
+
             return status
-            
+
         except Exception as e:
             self.logger.error(f"Error getting system status: {e}")
             return {

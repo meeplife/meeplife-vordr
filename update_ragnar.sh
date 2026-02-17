@@ -98,6 +98,7 @@ chmod +x "$ragnar_PATH"/*.sh 2>/dev/null || true
 # Ensure specific critical scripts are executable
 chmod +x "$ragnar_PATH/kill_port_8000.sh" 2>/dev/null || true
 chmod +x "$ragnar_PATH/update_ragnar.sh" 2>/dev/null || true
+chmod +x "$ragnar_PATH/scripts/"*.sh 2>/dev/null || true
 
 echo -e "${BLUE}Step 6.5: Validating actions.json configuration...${NC}"
 python3 << 'PYTHON_EOF'
@@ -132,6 +133,42 @@ try:
 except Exception as e:
     print(f"ERROR validating actions.json: {e}")
 PYTHON_EOF
+
+echo -e "${BLUE}Step 6.7: Checking Pwnagotchi migration...${NC}"
+MIGRATE_SCRIPT="$ragnar_PATH/scripts/migrate_pwnagotchi.sh"
+if [[ -d "/opt/pwnagotchi" ]] && [[ -f "$MIGRATE_SCRIPT" ]]; then
+    chmod +x "$MIGRATE_SCRIPT"
+    if bash "$MIGRATE_SCRIPT"; then
+        echo -e "${GREEN}Pwnagotchi migration check completed.${NC}"
+    else
+        echo -e "${YELLOW}Pwnagotchi migration had issues. Check /var/log/ragnar/ for details.${NC}"
+    fi
+
+    # Ensure boot-time migration service is installed
+    if [[ ! -f "/etc/systemd/system/ragnar-pwn-migrate.service" ]]; then
+        cat >"/etc/systemd/system/ragnar-pwn-migrate.service" <<SVCEOF
+[Unit]
+Description=Ragnar Pwnagotchi Migration Check
+After=local-fs.target network-online.target
+Before=pwnagotchi.service ragnar.service
+ConditionPathExists=/opt/pwnagotchi
+
+[Service]
+Type=oneshot
+ExecStart=${MIGRATE_SCRIPT}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+        chmod 644 "/etc/systemd/system/ragnar-pwn-migrate.service"
+        systemctl daemon-reload
+        systemctl enable ragnar-pwn-migrate >/dev/null 2>&1 || true
+        echo -e "${GREEN}Boot-time migration service installed.${NC}"
+    fi
+else
+    echo -e "${GREEN}No Pwnagotchi installation found or migration script missing. Skipping.${NC}"
+fi
 
 echo -e "${BLUE}Step 7: Starting ragnar service...${NC}"
 systemctl start ragnar.service

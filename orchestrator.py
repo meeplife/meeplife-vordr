@@ -27,7 +27,10 @@ import sys
 import threading
 import re
 from datetime import datetime, timedelta
-from actions.nmap_vuln_scanner import NmapVulnScanner
+try:
+    from actions.nmap_vuln_scanner import NmapVulnScanner
+except ImportError:
+    NmapVulnScanner = None
 from init_shared import shared_data
 from logger import Logger
 from resource_monitor import resource_monitor
@@ -259,6 +262,9 @@ class Orchestrator:
     def load_nmap_vuln_scanner(self, module_name):
         """Load the nmap vulnerability scanner"""
         try:
+            if NmapVulnScanner is None:
+                logger.warning("NmapVulnScanner not available (missing pandas/rich) - skipping")
+                return
             self.nmap_vuln_scanner = NmapVulnScanner(self.shared_data)
             logger.info("Nmap vulnerability scanner loaded successfully")
         except Exception as e:
