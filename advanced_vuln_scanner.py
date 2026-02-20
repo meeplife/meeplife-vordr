@@ -1701,29 +1701,47 @@ class AdvancedVulnScanner:
         ensures a clean slate before attempting to start a new instance.
         """
         port = port or self._zap_port
+        logger.info(f"[ZAP-CLEANUP] Starting cleanup for port {port}")
 
         # 1. Clean up our tracked process if it died
         if self._zap_process:
             retcode = self._zap_process.poll()
             if retcode is not None:
-                logger.info(f"Cleaning up dead ZAP process (exit code {retcode})")
+                stderr_tail = ''
                 try:
-                    self._zap_process.stderr.read()  # drain
+                    stderr_tail = self._zap_process.stderr.read()[-1000:] if self._zap_process.stderr else ''
                 except Exception:
                     pass
+                logger.warning(f"[ZAP-CLEANUP] Dead ZAP process found (PID {self._zap_process.pid}, "
+                               f"exit code {retcode})")
+                if stderr_tail:
+                    logger.warning(f"[ZAP-CLEANUP] Last stderr from dead process: {stderr_tail}")
                 self._zap_process = None
             else:
-                # Process is alive but not responding — kill it
+                # Process object exists and hasn't exited — check if API responds
                 if not self._is_zap_running():
-                    logger.warning("ZAP process alive but not responding — killing it")
+                    logger.warning(f"[ZAP-CLEANUP] ZAP process alive (PID {self._zap_process.pid}) "
+                                   f"but API not responding on port {port} — killing it")
                     try:
                         self._zap_process.kill()
                         self._zap_process.wait(timeout=10)
-                    except Exception:
-                        pass
+                        logger.info("[ZAP-CLEANUP] Killed unresponsive ZAP process")
+                    except Exception as e:
+                        logger.warning(f"[ZAP-CLEANUP] Error killing ZAP process: {e}")
                     self._zap_process = None
+                else:
+                    logger.info(f"[ZAP-CLEANUP] ZAP process (PID {self._zap_process.pid}) is running and responsive — no cleanup needed")
+        else:
+            logger.info("[ZAP-CLEANUP] No tracked ZAP process reference")
 
-        # 2. Kill any orphan process holding the ZAP port
+        # 2. Check if port is occupied and kill any orphan process
+        port_occupied = self._is_port_in_use(port)
+        if port_occupied:
+            logger.warning(f"[ZAP-CLEANUP] Port {port} is still in use — killing occupying process")
+        else:
+            logger.info(f"[ZAP-CLEANUP] Port {port} is free")
+            return  # Nothing else to clean up
+
         try:
             import sys
             if sys.platform == 'win32':
@@ -1732,14 +1750,21 @@ class AdvancedVulnScanner:
                     ['netstat', '-ano'],
                     capture_output=True, text=True, timeout=10
                 )
+                killed_any = False
                 for line in result.stdout.splitlines():
                     if f':{port}' in line and 'LISTENING' in line:
                         parts = line.strip().split()
                         pid = parts[-1]
                         if pid.isdigit():
-                            logger.info(f"Killing orphan process on port {port} (PID {pid})")
-                            subprocess.run(['taskkill', '/F', '/PID', pid],
-                                           capture_output=True, timeout=10)
+                            logger.info(f"[ZAP-CLEANUP] Killing orphan process on port {port} (PID {pid})")
+                            kill_result = subprocess.run(
+                                ['taskkill', '/F', '/PID', pid],
+                                capture_output=True, text=True, timeout=10
+                            )
+                            logger.info(f"[ZAP-CLEANUP] taskkill result: {kill_result.stdout.strip()} {kill_result.stderr.strip()}")
+                            killed_any = True
+                if not killed_any:
+                    logger.warning(f"[ZAP-CLEANUP] Port {port} in use but could not identify PID from netstat")
             else:
                 # Linux/macOS: use fuser or lsof
                 try:
@@ -1750,7 +1775,7 @@ class AdvancedVulnScanner:
                     pids = result.stdout.strip().split()
                     for pid in pids:
                         if pid.strip().isdigit():
-                            logger.info(f"Killing orphan process on port {port} (PID {pid})")
+                            logger.info(f"[ZAP-CLEANUP] Killing orphan process on port {port} (PID {pid})")
                             os.kill(int(pid), 9)
                 except FileNotFoundError:
                     # fuser not available, try lsof
@@ -1761,15 +1786,32 @@ class AdvancedVulnScanner:
                         )
                         for pid in result.stdout.strip().splitlines():
                             if pid.strip().isdigit():
-                                logger.info(f"Killing orphan process on port {port} (PID {pid})")
+                                logger.info(f"[ZAP-CLEANUP] Killing orphan process on port {port} (PID {pid})")
                                 os.kill(int(pid.strip()), 9)
                     except FileNotFoundError:
-                        pass
+                        logger.warning("[ZAP-CLEANUP] Neither fuser nor lsof available for port cleanup")
         except Exception as e:
-            logger.debug(f"Port cleanup check failed (non-fatal): {e}")
+            logger.warning(f"[ZAP-CLEANUP] Port cleanup failed: {e}")
 
         # 3. Brief wait for port to be released by OS
         time.sleep(1)
+
+        # 4. Verify port is now free
+        if self._is_port_in_use(port):
+            logger.error(f"[ZAP-CLEANUP] Port {port} STILL in use after cleanup — ZAP restart may fail")
+        else:
+            logger.info(f"[ZAP-CLEANUP] Port {port} is now free after cleanup")
+
+    def _is_port_in_use(self, port: int) -> bool:
+        """Check if a TCP port is currently in use."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex(('127.0.0.1', port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
 
     def start_zap_daemon(self, port: int = None) -> bool:
         """Start ZAP in daemon mode.
@@ -1777,53 +1819,104 @@ class AdvancedVulnScanner:
         Handles stale/crashed ZAP processes by cleaning up zombies and
         freeing locked ports before attempting to start a fresh instance.
         """
+        logger.info("[ZAP-START] ═══════════════════════════════════════════")
+        logger.info("[ZAP-START] Beginning ZAP daemon startup sequence")
+        logger.info(f"[ZAP-START] Requested port: {port or self._zap_port}")
+        logger.info(f"[ZAP-START] Current _zap_process ref: {self._zap_process is not None}")
+
         if self._is_zap_running():
+            logger.info("[ZAP-START] ZAP API is already responding — checking API key...")
             # Verify API key works by making a real API call
             try:
-                self._zap_api_call('JSON/core/view/version')
-                logger.info("ZAP daemon already running and API key is valid")
+                version_resp = self._zap_api_call('JSON/core/view/version')
+                logger.info(f"[ZAP-START] ZAP already running, version: {version_resp}. API key valid.")
                 return True
             except Exception as e:
-                logger.warning(f"ZAP daemon is running but API key validation failed: {e}. "
-                              f"Will try to disable API key requirement or restart ZAP.")
+                logger.warning(f"[ZAP-START] ZAP is responding but API key failed: {e}")
                 # Try with no API key (ZAP may have been started without one)
                 try:
                     url = f"{self._zap_base_url}/JSON/core/view/version/"
                     req = urllib.request.Request(url, method='GET')
                     with urllib.request.urlopen(req, timeout=5) as response:
                         if response.status == 200:
-                            logger.info("ZAP is running without API key - disabling API key requirement")
+                            logger.info("[ZAP-START] ZAP running without API key — adapting")
                             self._zap_api_key = ''
                             return True
                 except Exception:
                     pass
-                # ZAP is running with a different API key - cannot use it
-                logger.error("ZAP daemon is running with a different API key. "
-                            "Please stop ZAP and let Ragnar start it, or configure matching API keys.")
+                logger.error("[ZAP-START] ZAP is running with a different API key. "
+                            "Stop ZAP and let Ragnar start it, or configure matching API keys.")
                 return False
 
+        logger.info("[ZAP-START] ZAP API not responding — running cleanup...")
         # ZAP is not responding — clean up any dead process / port lock
         self._cleanup_dead_zap(port or self._zap_port)
 
         zap_path = self._tool_paths.get('zap')
         if not zap_path:
-            logger.error("OWASP ZAP not installed - no zap binary found in known locations")
+            logger.error("[ZAP-START] FAILED: No ZAP binary found in known paths. "
+                         "Install ZAP or set the path manually.")
             return False
 
         if not os.path.exists(zap_path):
-            logger.error(f"ZAP binary path no longer exists: {zap_path}")
+            logger.error(f"[ZAP-START] FAILED: ZAP binary path no longer exists: {zap_path}")
             return False
+
+        logger.info(f"[ZAP-START] ZAP binary: {zap_path}")
+        logger.info(f"[ZAP-START] ZAP binary size: {os.path.getsize(zap_path)} bytes")
 
         # Verify Java is available (ZAP requires Java 11+)
         java_path = shutil.which('java')
         if not java_path:
-            logger.error("Java not found in PATH - ZAP requires Java 11+ to run. "
-                         "Install with: sudo apt install default-jre")
+            logger.error("[ZAP-START] FAILED: Java not found in PATH. "
+                         "ZAP requires Java 11+. Install with: sudo apt install default-jre")
             return False
+
+        # Log Java version for diagnostics
+        try:
+            java_version_result = subprocess.run(
+                [java_path, '-version'],
+                capture_output=True, text=True, timeout=10
+            )
+            java_ver = (java_version_result.stderr or java_version_result.stdout).strip().split('\n')[0]
+            logger.info(f"[ZAP-START] Java: {java_path} -> {java_ver}")
+        except Exception as e:
+            logger.warning(f"[ZAP-START] Could not determine Java version: {e}")
+
+        # Log system memory
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            logger.info(f"[ZAP-START] System memory: {mem.total // (1024*1024)}MB total, "
+                        f"{mem.available // (1024*1024)}MB available ({mem.percent}% used)")
+        except ImportError:
+            # psutil not available — try OS-specific fallback
+            try:
+                import sys as _sys
+                if _sys.platform == 'win32':
+                    result = subprocess.run(
+                        ['wmic', 'OS', 'get', 'FreePhysicalMemory,TotalVisibleMemorySize', '/format:csv'],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    logger.info(f"[ZAP-START] Memory (wmic): {result.stdout.strip()}")
+                else:
+                    result = subprocess.run(['free', '-m'], capture_output=True, text=True, timeout=5)
+                    if result.stdout:
+                        for line in result.stdout.strip().split('\n'):
+                            if 'Mem' in line:
+                                logger.info(f"[ZAP-START] {line.strip()}")
+            except Exception:
+                logger.debug("[ZAP-START] Could not determine system memory")
 
         port = port or self._zap_port
         self._zap_port = port
         self._zap_base_url = f"http://127.0.0.1:{port}"
+
+        # Final port check before launch
+        if self._is_port_in_use(port):
+            logger.error(f"[ZAP-START] Port {port} is STILL in use after cleanup. "
+                         f"Cannot start ZAP daemon. Another process may be holding it.")
+            return False
 
         # Build command based on platform
         import sys
@@ -1839,16 +1932,15 @@ class AdvancedVulnScanner:
             '-config', 'connection.timeoutInSecs=120',
         ]
 
-        logger.info(f"Starting ZAP daemon: {' '.join(cmd[:3])}... (port {port})")
-        logger.info(f"ZAP binary: {zap_path}")
+        logger.info(f"[ZAP-START] Command: {' '.join(cmd)}")
 
         # Detect ARM/Raspberry Pi - ZAP needs much longer startup on ARM
         import platform
         machine = platform.machine().lower()
         is_arm = any(arch in machine for arch in ('arm', 'aarch64'))
         startup_timeout = 180 if is_arm else self.ZAP_STARTUP_TIMEOUT
-        if is_arm:
-            logger.info(f"ARM platform detected ({machine}) - using extended startup timeout: {startup_timeout}s")
+        logger.info(f"[ZAP-START] Platform: {machine}, ARM: {is_arm}, "
+                    f"startup timeout: {startup_timeout}s")
 
         try:
             # Use shell=True on Windows for .bat files
@@ -1863,55 +1955,97 @@ class AdvancedVulnScanner:
                 popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
             self._zap_process = subprocess.Popen(cmd, **popen_kwargs)
-            logger.info(f"ZAP process launched (PID: {self._zap_process.pid})")
+            logger.info(f"[ZAP-START] Process launched — PID: {self._zap_process.pid}")
 
-            # Wait for ZAP to start
+            # Wait for ZAP to start (poll every 3s)
             start_time = time.time()
+            poll_count = 0
             while time.time() - start_time < startup_timeout:
+                poll_count += 1
+                elapsed = int(time.time() - start_time)
+
                 # Check if process has exited early (crash/error)
                 retcode = self._zap_process.poll()
                 if retcode is not None:
+                    stdout_output = ''
                     stderr_output = ''
                     try:
-                        stderr_output = self._zap_process.stderr.read()[:2000]
+                        stdout_output = self._zap_process.stdout.read()[-3000:] if self._zap_process.stdout else ''
                     except Exception:
                         pass
-                    logger.error(f"ZAP process exited early with code {retcode}")
+                    try:
+                        stderr_output = self._zap_process.stderr.read()[-3000:] if self._zap_process.stderr else ''
+                    except Exception:
+                        pass
+                    logger.error(f"[ZAP-START] FAILED: Process exited after {elapsed}s "
+                                 f"with code {retcode} (poll #{poll_count})")
+                    if stdout_output:
+                        logger.error(f"[ZAP-START] stdout: {stdout_output}")
                     if stderr_output:
-                        logger.error(f"ZAP stderr: {stderr_output}")
+                        logger.error(f"[ZAP-START] stderr: {stderr_output}")
+                    else:
+                        logger.error("[ZAP-START] No stderr output captured")
+
+                    # Decode common exit codes
+                    if retcode == 137 or retcode == -9:
+                        logger.error("[ZAP-START] Exit code 137/-9 = Killed (likely OOM killer)")
+                    elif retcode == 1:
+                        logger.error("[ZAP-START] Exit code 1 = General error "
+                                     "(port conflict, config issue, or Java error)")
+                    elif retcode == 127:
+                        logger.error("[ZAP-START] Exit code 127 = Command not found")
+
+                    self._zap_process = None
                     return False
 
                 if self._is_zap_running():
-                    elapsed = int(time.time() - start_time)
-                    logger.info(f"ZAP daemon started successfully on port {port} ({elapsed}s)")
+                    logger.info(f"[ZAP-START] SUCCESS: ZAP daemon started on port {port} "
+                                f"in {elapsed}s (poll #{poll_count})")
+                    # Log ZAP version
+                    try:
+                        ver = self._zap_api_call('JSON/core/view/version')
+                        logger.info(f"[ZAP-START] ZAP version: {ver}")
+                    except Exception:
+                        pass
+                    logger.info("[ZAP-START] ═══════════════════════════════════════════")
                     return True
+
+                if poll_count % 5 == 0:  # Log every ~15s
+                    logger.info(f"[ZAP-START] Waiting for ZAP API... {elapsed}s elapsed "
+                                f"(poll #{poll_count}, timeout={startup_timeout}s)")
                 time.sleep(3)
 
             # Timeout reached - capture diagnostics
             elapsed = int(time.time() - start_time)
-            logger.error(f"ZAP daemon failed to start within {startup_timeout}s timeout")
+            logger.error(f"[ZAP-START] FAILED: Timeout after {elapsed}s ({poll_count} polls)")
             retcode = self._zap_process.poll()
             if retcode is not None:
-                logger.error(f"ZAP process exited with code {retcode} during timeout wait")
+                logger.error(f"[ZAP-START] Process exited during timeout with code {retcode}")
                 try:
-                    stderr_output = self._zap_process.stderr.read()[:2000]
+                    stderr_output = self._zap_process.stderr.read()[-3000:]
                     if stderr_output:
-                        logger.error(f"ZAP stderr: {stderr_output}")
+                        logger.error(f"[ZAP-START] stderr: {stderr_output}")
                 except Exception:
                     pass
             else:
-                logger.error(f"ZAP process still running (PID: {self._zap_process.pid}) "
-                             f"but not responding on port {port}")
+                logger.error(f"[ZAP-START] Process still alive (PID {self._zap_process.pid}) "
+                             f"but API not responding on port {port}")
+                logger.error("[ZAP-START] Possible causes: Java startup extremely slow, "
+                             "port binding failed silently, or ZAP stuck in init")
+            logger.info("[ZAP-START] ═══════════════════════════════════════════")
             return False
 
         except FileNotFoundError:
-            logger.error(f"ZAP binary not found or not executable: {zap_path}")
+            logger.error(f"[ZAP-START] FAILED: Binary not found or not executable: {zap_path}")
             return False
         except PermissionError:
-            logger.error(f"Permission denied running ZAP binary: {zap_path}")
+            logger.error(f"[ZAP-START] FAILED: Permission denied: {zap_path}")
+            return False
+        except OSError as e:
+            logger.error(f"[ZAP-START] FAILED: OS error launching process: {e}")
             return False
         except Exception as e:
-            logger.error(f"Failed to start ZAP daemon: {e}")
+            logger.error(f"[ZAP-START] FAILED: Unexpected error: {type(e).__name__}: {e}")
             return False
 
     def stop_zap_daemon(self) -> bool:
@@ -2314,14 +2448,20 @@ class AdvancedVulnScanner:
     def _run_zap_spider(self, scan_id: str, target: str, options: Dict):
         """Run ZAP spider to discover URLs"""
         if not self._is_zap_running():
+            self._scan_log(scan_id, 'warning', "ZAP daemon not responding — attempting to start for spider scan...")
             started = False
             for attempt in range(2):
+                self._scan_log(scan_id, 'info', f"ZAP start attempt {attempt + 1}/2...")
                 if self.start_zap_daemon():
+                    self._scan_log(scan_id, 'info', "ZAP daemon started successfully")
                     started = True
                     break
                 if attempt == 0:
+                    self._scan_log(scan_id, 'warning', "First attempt failed — retrying in 3s...")
                     time.sleep(3)
             if not started:
+                self._scan_log(scan_id, 'error',
+                               "ZAP daemon failed to start. Check server logs for [ZAP-START] diagnostics.")
                 raise RuntimeError("Failed to start ZAP daemon")
 
         progress = self.active_scans[scan_id]
@@ -2441,14 +2581,20 @@ class AdvancedVulnScanner:
     def _run_zap_active_scan(self, scan_id: str, target: str, options: Dict):
         """Run ZAP active vulnerability scan with strength-aware configuration."""
         if not self._is_zap_running():
+            self._scan_log(scan_id, 'warning', "ZAP daemon not responding — attempting to start for active scan...")
             started = False
             for attempt in range(2):
+                self._scan_log(scan_id, 'info', f"ZAP start attempt {attempt + 1}/2...")
                 if self.start_zap_daemon():
+                    self._scan_log(scan_id, 'info', "ZAP daemon started successfully")
                     started = True
                     break
                 if attempt == 0:
+                    self._scan_log(scan_id, 'warning', "First attempt failed — retrying in 3s...")
                     time.sleep(3)
             if not started:
+                self._scan_log(scan_id, 'error',
+                               "ZAP daemon failed to start. Check server logs for [ZAP-START] diagnostics.")
                 raise RuntimeError("Failed to start ZAP daemon")
 
         progress = self.active_scans[scan_id]
@@ -3015,21 +3161,28 @@ class AdvancedVulnScanner:
         Thorough+ (5 phases): Spider → AJAX Spider → Active Scan → ragnar-fuzz → JSON Reflections
         """
         if not self._is_zap_running():
-            self._scan_log(scan_id, 'info', "ZAP not running — attempting to start daemon...")
+            self._scan_log(scan_id, 'warning', "ZAP daemon not responding — attempting to start...")
             # Try up to 2 times (cleanup may need a moment to free the port)
             started = False
             for attempt in range(2):
+                self._scan_log(scan_id, 'info',
+                               f"ZAP start attempt {attempt + 1}/2 (port {self._zap_port})...")
                 if self.start_zap_daemon():
+                    self._scan_log(scan_id, 'info', "ZAP daemon started successfully")
                     started = True
                     break
                 if attempt == 0:
                     self._scan_log(scan_id, 'warning',
-                                   "First ZAP start attempt failed — retrying after cleanup...")
+                                   "First ZAP start attempt failed — cleaning up and retrying in 3s...")
                     time.sleep(3)
             if not started:
+                self._scan_log(scan_id, 'error',
+                               f"ZAP daemon failed to start after 2 attempts on port {self._zap_port}. "
+                               "Check server logs for [ZAP-START] entries with detailed diagnostics.")
                 raise RuntimeError(
                     "Failed to start ZAP daemon. This can happen after a heavy scan "
-                    "causes ZAP to crash (OOM). Check Java memory or restart the service.")
+                    "causes ZAP to crash (OOM). Check Java memory or restart the service. "
+                    "See server logs for [ZAP-START] diagnostics.")
 
         progress = self.active_scans[scan_id]
         profile = self._get_strength_profile(options)
