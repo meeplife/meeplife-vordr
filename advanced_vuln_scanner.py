@@ -1693,8 +1693,90 @@ class AdvancedVulnScanner:
 
         return True, ""
 
+    def _cleanup_dead_zap(self, port: int = None):
+        """Clean up dead/zombie ZAP process and free the port.
+
+        After heavy scans (especially insane strength), ZAP can OOM or crash
+        leaving behind a zombie process and a locked port.  This method
+        ensures a clean slate before attempting to start a new instance.
+        """
+        port = port or self._zap_port
+
+        # 1. Clean up our tracked process if it died
+        if self._zap_process:
+            retcode = self._zap_process.poll()
+            if retcode is not None:
+                logger.info(f"Cleaning up dead ZAP process (exit code {retcode})")
+                try:
+                    self._zap_process.stderr.read()  # drain
+                except Exception:
+                    pass
+                self._zap_process = None
+            else:
+                # Process is alive but not responding — kill it
+                if not self._is_zap_running():
+                    logger.warning("ZAP process alive but not responding — killing it")
+                    try:
+                        self._zap_process.kill()
+                        self._zap_process.wait(timeout=10)
+                    except Exception:
+                        pass
+                    self._zap_process = None
+
+        # 2. Kill any orphan process holding the ZAP port
+        try:
+            import sys
+            if sys.platform == 'win32':
+                # Windows: find PID on port and kill it
+                result = subprocess.run(
+                    ['netstat', '-ano'],
+                    capture_output=True, text=True, timeout=10
+                )
+                for line in result.stdout.splitlines():
+                    if f':{port}' in line and 'LISTENING' in line:
+                        parts = line.strip().split()
+                        pid = parts[-1]
+                        if pid.isdigit():
+                            logger.info(f"Killing orphan process on port {port} (PID {pid})")
+                            subprocess.run(['taskkill', '/F', '/PID', pid],
+                                           capture_output=True, timeout=10)
+            else:
+                # Linux/macOS: use fuser or lsof
+                try:
+                    result = subprocess.run(
+                        ['fuser', f'{port}/tcp'],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    pids = result.stdout.strip().split()
+                    for pid in pids:
+                        if pid.strip().isdigit():
+                            logger.info(f"Killing orphan process on port {port} (PID {pid})")
+                            os.kill(int(pid), 9)
+                except FileNotFoundError:
+                    # fuser not available, try lsof
+                    try:
+                        result = subprocess.run(
+                            ['lsof', '-ti', f':{port}'],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        for pid in result.stdout.strip().splitlines():
+                            if pid.strip().isdigit():
+                                logger.info(f"Killing orphan process on port {port} (PID {pid})")
+                                os.kill(int(pid.strip()), 9)
+                    except FileNotFoundError:
+                        pass
+        except Exception as e:
+            logger.debug(f"Port cleanup check failed (non-fatal): {e}")
+
+        # 3. Brief wait for port to be released by OS
+        time.sleep(1)
+
     def start_zap_daemon(self, port: int = None) -> bool:
-        """Start ZAP in daemon mode"""
+        """Start ZAP in daemon mode.
+
+        Handles stale/crashed ZAP processes by cleaning up zombies and
+        freeing locked ports before attempting to start a fresh instance.
+        """
         if self._is_zap_running():
             # Verify API key works by making a real API call
             try:
@@ -1719,6 +1801,9 @@ class AdvancedVulnScanner:
                 logger.error("ZAP daemon is running with a different API key. "
                             "Please stop ZAP and let Ragnar start it, or configure matching API keys.")
                 return False
+
+        # ZAP is not responding — clean up any dead process / port lock
+        self._cleanup_dead_zap(port or self._zap_port)
 
         zap_path = self._tool_paths.get('zap')
         if not zap_path:
@@ -2229,7 +2314,14 @@ class AdvancedVulnScanner:
     def _run_zap_spider(self, scan_id: str, target: str, options: Dict):
         """Run ZAP spider to discover URLs"""
         if not self._is_zap_running():
-            if not self.start_zap_daemon():
+            started = False
+            for attempt in range(2):
+                if self.start_zap_daemon():
+                    started = True
+                    break
+                if attempt == 0:
+                    time.sleep(3)
+            if not started:
                 raise RuntimeError("Failed to start ZAP daemon")
 
         progress = self.active_scans[scan_id]
@@ -2349,7 +2441,14 @@ class AdvancedVulnScanner:
     def _run_zap_active_scan(self, scan_id: str, target: str, options: Dict):
         """Run ZAP active vulnerability scan with strength-aware configuration."""
         if not self._is_zap_running():
-            if not self.start_zap_daemon():
+            started = False
+            for attempt in range(2):
+                if self.start_zap_daemon():
+                    started = True
+                    break
+                if attempt == 0:
+                    time.sleep(3)
+            if not started:
                 raise RuntimeError("Failed to start ZAP daemon")
 
         progress = self.active_scans[scan_id]
@@ -2916,8 +3015,21 @@ class AdvancedVulnScanner:
         Thorough+ (5 phases): Spider → AJAX Spider → Active Scan → ragnar-fuzz → JSON Reflections
         """
         if not self._is_zap_running():
-            if not self.start_zap_daemon():
-                raise RuntimeError("Failed to start ZAP daemon")
+            self._scan_log(scan_id, 'info', "ZAP not running — attempting to start daemon...")
+            # Try up to 2 times (cleanup may need a moment to free the port)
+            started = False
+            for attempt in range(2):
+                if self.start_zap_daemon():
+                    started = True
+                    break
+                if attempt == 0:
+                    self._scan_log(scan_id, 'warning',
+                                   "First ZAP start attempt failed — retrying after cleanup...")
+                    time.sleep(3)
+            if not started:
+                raise RuntimeError(
+                    "Failed to start ZAP daemon. This can happen after a heavy scan "
+                    "causes ZAP to crash (OOM). Check Java memory or restart the service.")
 
         progress = self.active_scans[scan_id]
         profile = self._get_strength_profile(options)
@@ -3033,6 +3145,13 @@ class AdvancedVulnScanner:
                 self._scan_log(scan_id, 'info', "Cleared scan auth rules")
             # Clean up temporary scan policy
             self._remove_zap_scan_policy(scan_id, policy_name)
+            # Clear ZAP session after scan to free memory (prevents OOM on next scan)
+            try:
+                if self._is_zap_running():
+                    self._zap_api_call('JSON/core/action/newSession', {'overwrite': 'true'})
+                    self._scan_log(scan_id, 'info', "Post-scan: ZAP session cleared to free memory")
+            except Exception as cleanup_err:
+                self._scan_log(scan_id, 'debug', f"Post-scan session cleanup failed (non-fatal): {cleanup_err}")
 
     def _run_zap_spider_phase(self, scan_id: str, target: str, options: Dict, progress: ScanProgress):
         """Spider phase of full scan"""
