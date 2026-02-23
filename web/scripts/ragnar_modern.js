@@ -30,6 +30,7 @@ let pwnStatus = {
     log_file: null
 };
 let lastPwnState = null;
+let _pwnSwapRequestedThisSession = false;
 let currentPwnStatusInterval = PWN_STATUS_POLL_INTERVAL;
 let pwnLogCursor = 0;
 let pwnLogStreamTimer = null;
@@ -380,10 +381,21 @@ function initializeSocket() {
         updateConnectionStatus(true);
         reconnectAttempts = 0;
         addConsoleMessage('Connected to Ragnar server', 'success');
-        
+
         socket.emit('request_status');
         socket.emit('request_logs');
         refreshPwnagotchiStatus({ silent: true });
+    });
+
+    socket.on('connected', function(data) {
+        // Server sends auth_configured flag on every socket connect
+        if (data && typeof data.auth_configured !== 'undefined') {
+            const show = data.auth_configured;
+            const logoutBtn = document.getElementById('logout-btn');
+            if (logoutBtn) logoutBtn.classList.toggle('hidden', !show);
+            const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
+            if (mobileLogoutBtn) mobileLogoutBtn.classList.toggle('hidden', !show);
+        }
     });
 
     socket.on('disconnect', function() {
@@ -689,9 +701,19 @@ function initializeThreatIntelFilters() {
 
 async function loadInitialData() {
     try {
+        // Check auth status to show/hide logout button and wait for DB if needed
+        try {
+            const authStatus = await fetchAPI('/api/auth/status');
+            const logoutBtn = document.getElementById('logout-btn');
+            if (logoutBtn) logoutBtn.classList.toggle('hidden', !authStatus.configured);
+            const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
+            if (mobileLogoutBtn) mobileLogoutBtn.classList.toggle('hidden', !authStatus.configured);
+
+        } catch (e) { /* ignore - auth check is non-critical */ }
+
         // OPTIMIZATION: Use combined /api/dashboard/quick endpoint for fast loading
         // This eliminates multiple API calls and reduces load time from 5-10s to <2s on Pi Zero
-        
+
         // Load critical dashboard data using optimized combined endpoint
         const quickData = await fetchAPI('/api/dashboard/quick');
         if (quickData) {
@@ -700,9 +722,10 @@ async function loadInitialData() {
             updateDashboardStatus(quickData);
         }
         
-        // OPTIMIZATION: Defer WiFi status to after dashboard is visible
+        // OPTIMIZATION: Defer WiFi + LAN status to after dashboard is visible
         setTimeout(() => {
             refreshWifiStatus().catch(err => console.warn('WiFi status load failed:', err));
+            refreshEthernetStatus().catch(err => console.warn('LAN status load failed:', err));
         }, 200);
         
         // OPTIMIZATION: Defer console logs to much later (lowest priority)
@@ -843,6 +866,7 @@ async function loadTabData(tabName) {
                 await loadConnectData();
             } else {
                 await refreshWifiStatus().catch(err => console.warn('WiFi refresh failed:', err));
+                await refreshEthernetStatus().catch(err => console.warn('LAN refresh failed:', err));
                 await refreshBluetoothStatus().catch(err => console.warn('Bluetooth refresh failed:', err));
             }
             break;
@@ -2950,26 +2974,370 @@ async function loadConfigData() {
     try {
         const config = await fetchAPI('/api/config');
         displayConfigForm(config);
-        
+
         // Load AI configuration
         loadAIConfiguration(config);
-        
+
         // Load hardware profiles
         await loadHardwareProfiles();
-        
+
         // Display current profile if set
         displayCurrentProfile(config);
-        
+
         // Update vulnerability count in data management card
         updateVulnerabilityCount();
         await refreshPwnagotchiStatus({ silent: true });
-        
+
         // Also check for updates when loading config tab
         checkForUpdates();
+
+        // Load security configuration
+        await loadSecurityConfig();
     } catch (error) {
         console.error('Error loading config:', error);
     }
 }
+
+// ============================================================================
+// SECURITY / AUTHENTICATION CONFIG
+// ============================================================================
+
+let _securityExpanded = false;
+
+function toggleSecuritySection() {
+    _securityExpanded = !_securityExpanded;
+    const content = document.getElementById('security-config-content');
+    const summary = document.getElementById('security-summary');
+    const chevron = document.getElementById('security-chevron');
+    if (_securityExpanded) {
+        content.classList.remove('hidden');
+        summary.classList.add('hidden');
+        chevron.style.transform = 'rotate(90deg)';
+    } else {
+        content.classList.add('hidden');
+        summary.classList.remove('hidden');
+        chevron.style.transform = 'rotate(0deg)';
+    }
+}
+
+async function loadSecurityConfig() {
+    try {
+        const status = await fetchAPI('/api/auth/status');
+        const container = document.getElementById('security-config-content');
+        const summary = document.getElementById('security-summary');
+        const badge = document.getElementById('security-badge');
+        if (!container) return;
+
+        // Show/hide logout buttons in nav (desktop + mobile)
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.classList.toggle('hidden', !status.configured);
+        }
+        const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
+        if (mobileLogoutBtn) {
+            mobileLogoutBtn.classList.toggle('hidden', !status.configured);
+        }
+
+        // Update summary and badge based on status
+        if (status.configured) {
+            if (badge) { badge.classList.remove('hidden'); }
+            if (summary) {
+                summary.innerHTML = '<p class="text-sm text-green-400">Authentication is enabled. Database is encrypted and hardware-bound. Expand to manage.</p>';
+            }
+        } else {
+            if (badge) { badge.classList.add('hidden'); }
+            if (summary) {
+                summary.innerHTML = '<p class="text-sm text-red-400">Set up authentication to protect your Ragnar instance. Once enabled, all access will require login. The database will be encrypted and bound to this hardware.</p>';
+            }
+        }
+
+        if (!status.configured) {
+            // Show setup form
+            container.innerHTML = `
+                <div class="mb-4">
+                    <div class="p-3 rounded-lg bg-yellow-900/30 border border-yellow-700 text-sm text-yellow-300 mb-4">
+                        Warning: Once authentication is enabled, you will need your password or recovery codes to access Ragnar.
+                        Make sure to save your recovery codes in a safe place.
+                    </div>
+                </div>
+                <form id="auth-setup-form" onsubmit="handleAuthSetup(event)" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Username</label>
+                        <input type="text" id="setup-username" required autocomplete="username"
+                               class="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                               placeholder="Choose a username">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Password</label>
+                        <input type="password" id="setup-password" required minlength="8" autocomplete="new-password"
+                               class="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                               placeholder="Minimum 8 characters">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-300 mb-2">Confirm Password</label>
+                        <input type="password" id="setup-confirm-password" required minlength="8" autocomplete="new-password"
+                               class="w-full px-4 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                               placeholder="Confirm password">
+                    </div>
+                    <div id="setup-status" class="hidden p-3 rounded-lg text-sm"></div>
+                    <button type="submit" id="setup-btn"
+                            class="w-full bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">
+                        Enable Authentication
+                    </button>
+                </form>
+            `;
+        } else {
+            // Show management panel
+            let hwBadge = status.hw_match
+                ? '<span class="text-green-400 text-xs">Hardware matched</span>'
+                : '<span class="text-red-400 text-xs">Hardware mismatch!</span>';
+
+            container.innerHTML = `
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span class="text-green-400 font-medium">Authentication Enabled</span>
+                            <span class="mx-2 text-gray-500">|</span>
+                            ${hwBadge}
+                            <span class="mx-2 text-gray-500">|</span>
+                            <span class="text-gray-400 text-xs">${status.recovery_codes_remaining} recovery codes remaining</span>
+                        </div>
+                    </div>
+
+                    <!-- Change Password -->
+                    <div class="glass rounded-lg p-4">
+                        <h4 class="font-medium mb-3">Change Password</h4>
+                        <form id="change-pw-form" onsubmit="handleChangePassword(event)" class="space-y-3">
+                            <input type="password" id="current-password" required autocomplete="current-password"
+                                   class="w-full px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-sky-500 outline-none"
+                                   placeholder="Current password">
+                            <input type="password" id="new-password" required minlength="8" autocomplete="new-password"
+                                   class="w-full px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-sky-500 outline-none"
+                                   placeholder="New password (min 8 chars)">
+                            <input type="password" id="confirm-new-password" required minlength="8" autocomplete="new-password"
+                                   class="w-full px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white placeholder-gray-400 focus:ring-2 focus:ring-sky-500 outline-none"
+                                   placeholder="Confirm new password">
+                            <div id="change-pw-status" class="hidden p-3 rounded-lg text-sm"></div>
+                            <button type="submit"
+                                    class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
+                                Change Password
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Recovery Codes -->
+                    <div class="glass rounded-lg p-4">
+                        <h4 class="font-medium mb-3">Recovery Codes</h4>
+                        <p class="text-gray-400 text-sm mb-3">
+                            ${status.recovery_codes_remaining} of 10 codes remaining.
+                            Regenerate to get 10 new codes (old codes will be invalidated).
+                        </p>
+                        <div id="regen-codes-display" class="hidden mb-3"></div>
+                        <div id="regen-status" class="hidden p-3 rounded-lg text-sm mb-3"></div>
+                        <button onclick="handleRegenRecovery()"
+                                class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
+                            Regenerate Recovery Codes
+                        </button>
+                    </div>
+
+                    <!-- Logout -->
+                    <div class="glass rounded-lg p-4">
+                        <h4 class="font-medium mb-3">Session</h4>
+                        <button onclick="handleLogout()"
+                                class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
+                            Logout
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Error loading security config:', error);
+    }
+}
+
+async function handleAuthSetup(event) {
+    event.preventDefault();
+    const statusEl = document.getElementById('setup-status');
+    const btn = document.getElementById('setup-btn');
+
+    const username = document.getElementById('setup-username').value.trim();
+    const password = document.getElementById('setup-password').value;
+    const confirm = document.getElementById('setup-confirm-password').value;
+
+    if (password !== confirm) {
+        statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+        statusEl.textContent = 'Passwords do not match';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Setting up...';
+
+    try {
+        const result = await postAPI('/api/auth/setup', {
+            username, password, confirm_password: confirm
+        });
+
+        if (result.success) {
+            // Show recovery codes in a prominent way
+            statusEl.className = 'p-3 rounded-lg text-sm bg-green-900/30 border border-green-700 text-green-300';
+            statusEl.innerHTML = 'Authentication enabled! Save your recovery codes below.';
+            statusEl.classList.remove('hidden');
+
+            const container = document.getElementById('security-config-content');
+            container.innerHTML = `
+                <div class="p-4 rounded-lg bg-green-900/20 border border-green-700 mb-4">
+                    <h4 class="font-bold text-green-400 mb-2">Authentication Enabled Successfully!</h4>
+                    <p class="text-sm text-gray-300 mb-3">
+                        Save these recovery codes in a safe place. Each code can only be used once.
+                        You will need them if you forget your password.
+                    </p>
+                    <p class="text-sm text-yellow-300 mb-4">
+                        The database will be encrypted automatically when you log out or when Ragnar shuts down.
+                        From the next start, a login will be required.
+                    </p>
+                    <div class="grid grid-cols-2 gap-2 mb-4">
+                        ${result.recovery_codes.map(code =>
+                            `<div class="font-mono text-sm bg-slate-800 border border-sky-700 rounded px-3 py-2 text-center text-sky-300 select-all">${code}</div>`
+                        ).join('')}
+                    </div>
+                    <button onclick="copyRecoveryCodes()" id="copy-codes-btn"
+                            class="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg transition-colors text-sm mr-2">
+                        Copy All Codes
+                    </button>
+                    <button onclick="loadSecurityConfig()"
+                            class="bg-slate-600 hover:bg-slate-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
+                        Done
+                    </button>
+                </div>
+            `;
+
+            // Store codes temporarily for copy function
+            window._tempRecoveryCodes = result.recovery_codes;
+
+            addConsoleMessage('Authentication enabled - database encrypted', 'success');
+        } else {
+            statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+            statusEl.textContent = result.error || 'Setup failed';
+            statusEl.classList.remove('hidden');
+            btn.disabled = false;
+            btn.textContent = 'Enable Authentication';
+        }
+    } catch (error) {
+        statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+        statusEl.textContent = 'Setup failed: ' + (error.message || 'Unknown error');
+        statusEl.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = 'Enable Authentication';
+    }
+}
+
+function copyRecoveryCodes() {
+    if (window._tempRecoveryCodes) {
+        const text = window._tempRecoveryCodes.join('\n');
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('copy-codes-btn');
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy All Codes'; }, 2000);
+        }).catch(() => {
+            addConsoleMessage('Failed to copy - please select and copy manually', 'warning');
+        });
+    }
+}
+
+async function handleChangePassword(event) {
+    event.preventDefault();
+    const statusEl = document.getElementById('change-pw-status');
+
+    const currentPw = document.getElementById('current-password').value;
+    const newPw = document.getElementById('new-password').value;
+    const confirmPw = document.getElementById('confirm-new-password').value;
+
+    if (newPw !== confirmPw) {
+        statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+        statusEl.textContent = 'New passwords do not match';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    try {
+        const result = await postAPI('/api/auth/change-password', {
+            current_password: currentPw,
+            new_password: newPw
+        });
+        if (result.success) {
+            statusEl.className = 'p-3 rounded-lg text-sm bg-green-900/30 border border-green-700 text-green-300';
+            statusEl.textContent = 'Password changed successfully';
+            statusEl.classList.remove('hidden');
+            document.getElementById('change-pw-form').reset();
+            addConsoleMessage('Password changed successfully', 'success');
+        } else {
+            statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+            statusEl.textContent = result.error || 'Failed to change password';
+            statusEl.classList.remove('hidden');
+        }
+    } catch (error) {
+        statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+        statusEl.textContent = 'Error: ' + (error.message || 'Unknown error');
+        statusEl.classList.remove('hidden');
+    }
+}
+
+async function handleRegenRecovery() {
+    const password = prompt('Enter your current password to regenerate recovery codes:');
+    if (!password) return;
+
+    const statusEl = document.getElementById('regen-status');
+    const displayEl = document.getElementById('regen-codes-display');
+
+    try {
+        const result = await postAPI('/api/auth/regenerate-recovery', { password });
+        if (result.success) {
+            displayEl.innerHTML = `
+                <div class="p-3 rounded-lg bg-slate-800 border border-sky-700">
+                    <p class="text-sm text-gray-300 mb-2">New recovery codes (save these!):</p>
+                    <div class="grid grid-cols-2 gap-2">
+                        ${result.recovery_codes.map(code =>
+                            `<div class="font-mono text-sm bg-slate-900 rounded px-2 py-1 text-center text-sky-300 select-all">${code}</div>`
+                        ).join('')}
+                    </div>
+                </div>
+            `;
+            displayEl.classList.remove('hidden');
+
+            statusEl.className = 'p-3 rounded-lg text-sm bg-green-900/30 border border-green-700 text-green-300';
+            statusEl.textContent = 'Recovery codes regenerated. Save them securely!';
+            statusEl.classList.remove('hidden');
+
+            window._tempRecoveryCodes = result.recovery_codes;
+            addConsoleMessage('Recovery codes regenerated', 'success');
+        } else {
+            statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+            statusEl.textContent = result.error || 'Failed to regenerate codes';
+            statusEl.classList.remove('hidden');
+        }
+    } catch (error) {
+        statusEl.className = 'p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-300';
+        statusEl.textContent = 'Error: ' + (error.message || 'Unknown error');
+        statusEl.classList.remove('hidden');
+    }
+}
+
+async function handleLogout() {
+    // Disconnect socket first to prevent reconnect loops
+    if (socket) socket.disconnect();
+    try {
+        await postAPI('/api/auth/logout', {});
+    } catch (e) {
+        // Ignore - we're redirecting anyway
+    }
+    // Replace so back button can't return to the dashboard
+    window.location.replace('/login');
+}
+
+
 
 function setPwnStatusPollInterval(intervalMs = PWN_STATUS_POLL_INTERVAL) {
     const normalized = Math.max(2000, intervalMs || PWN_STATUS_POLL_INTERVAL);
@@ -3118,10 +3486,19 @@ function updatePwnagotchiUI(status = {}) {
 }
 
 function updatePwnButtons() {
+    // Show install card only when not installed, swap card only when installed
+    const installCard = document.getElementById('pwn-install-card');
+    if (installCard) {
+        installCard.style.display = pwnStatus.installed ? 'none' : '';
+    }
+    const swapCard = document.getElementById('pwn-swap-card');
+    if (swapCard) {
+        swapCard.style.display = pwnStatus.installed ? '' : 'none';
+    }
+
     const installBtn = document.getElementById('pwn-install-btn');
     if (installBtn) {
-        const label = pwnStatus.installed ? 'Reinstall Pwnagotchi' : 'Install Pwnagotchi';
-        installBtn.textContent = pwnStatus.installing ? 'Installing...' : label;
+        installBtn.textContent = pwnStatus.installing ? 'Installing...' : 'Install Pwnagotchi';
         installBtn.disabled = pwnStatus.installing;
         installBtn.classList.toggle('opacity-70', pwnStatus.installing);
         installBtn.classList.toggle('cursor-not-allowed', pwnStatus.installing);
@@ -3129,24 +3506,76 @@ function updatePwnButtons() {
 
     const swapToPwnBtn = document.getElementById('pwn-swap-to-pwn-btn');
     if (swapToPwnBtn) {
-        const busySwitching = pwnStatus.state === 'switching';
-        const switchingToPwn = busySwitching && pwnStatus.target_mode === 'pwnagotchi';
-        const disableSwapToPwn = !pwnStatus.installed || pwnStatus.installing || busySwitching;
-        swapToPwnBtn.disabled = disableSwapToPwn;
-        swapToPwnBtn.textContent = switchingToPwn ? 'Switch Scheduled...' : 'Switch to Pwnagotchi';
-        swapToPwnBtn.classList.toggle('opacity-60', disableSwapToPwn);
-        swapToPwnBtn.classList.toggle('cursor-not-allowed', disableSwapToPwn);
+        const busySwitching = pwnStatus.state === 'switching' && pwnStatus.target_mode === 'pwnagotchi';
+        const pwnRunning = pwnStatus.state === 'running' && pwnStatus.target_mode === 'pwnagotchi';
+
+        if (busySwitching || pwnRunning) {
+            // Show portal link with countdown
+            const portalUrl = 'http://' + window.location.hostname + ':8080';
+            swapToPwnBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+            swapToPwnBtn.classList.add('bg-green-600', 'hover:bg-green-700');
+            swapToPwnBtn.classList.remove('bg-amber-600', 'hover:bg-amber-700');
+
+            if (!swapToPwnBtn._countdownRunning && _pwnSwapRequestedThisSession) {
+                // Poll pwnagotchi portal directly - works even after Ragnar goes down.
+                // mode:'no-cors' gives an opaque response but won't throw, meaning server is up.
+                swapToPwnBtn._countdownRunning = true;
+                let elapsed = 0;
+                const MAX_WAIT = 60;
+                swapToPwnBtn.disabled = true;
+                swapToPwnBtn.textContent = `Waiting for Pwnagotchi... 0s`;
+                const poll = setInterval(async () => {
+                    elapsed++;
+                    swapToPwnBtn.textContent = `Waiting for Pwnagotchi... ${elapsed}s`;
+                    try {
+                        await fetch(portalUrl, { mode: 'no-cors', cache: 'no-store' });
+                        // Reached here = server responded (opaque ok)
+                        clearInterval(poll);
+                        swapToPwnBtn.disabled = false;
+                        swapToPwnBtn.textContent = 'Go to Pwnagotchi Portal';
+                        swapToPwnBtn.onclick = function(e) {
+                            e.preventDefault();
+                            window.open(portalUrl, '_blank');
+                        };
+                    } catch (_) {
+                        // Not up yet; fall through unless timeout
+                        if (elapsed >= MAX_WAIT) {
+                            clearInterval(poll);
+                            swapToPwnBtn.disabled = false;
+                            swapToPwnBtn.textContent = 'Open Pwnagotchi Portal';
+                            swapToPwnBtn.onclick = function(e) {
+                                e.preventDefault();
+                                window.open(portalUrl, '_blank');
+                            };
+                        }
+                    }
+                }, 1000);
+            }
+        } else {
+            // Installed - normal swap button
+            const disableSwap = pwnStatus.installing || pwnStatus.state === 'switching';
+            swapToPwnBtn.disabled = disableSwap;
+            swapToPwnBtn.textContent = 'Switch to Pwnagotchi';
+            swapToPwnBtn.classList.toggle('opacity-60', disableSwap);
+            swapToPwnBtn.classList.toggle('cursor-not-allowed', disableSwap);
+            swapToPwnBtn.classList.remove('bg-green-600', 'hover:bg-green-700');
+            swapToPwnBtn.onclick = null;
+            swapToPwnBtn._countdownRunning = false;
+            _pwnSwapRequestedThisSession = false;
+        }
     }
 
     const swapHint = document.getElementById('pwn-swap-hint');
     if (swapHint) {
         let hint = 'Ragnar UI becomes unavailable once the service stops. Plan to reboot via SSH to come back.';
-        if (!pwnStatus.installed) {
-            hint = 'Install Pwnagotchi first to enable service swapping.';
-        } else if (pwnStatus.installing) {
+        if (pwnStatus.installing) {
             hint = 'Installer is still running. Swapping will be available once it completes.';
+        } else if (pwnStatus.state === 'switching' && pwnStatus.target_mode === 'pwnagotchi') {
+            hint = 'Pwnagotchi is starting up. Click the button above to open its portal once ready.';
+        } else if (pwnStatus.state === 'running' && pwnStatus.target_mode === 'pwnagotchi') {
+            hint = 'Pwnagotchi is running. Ragnar will shut down shortly.';
         } else if (pwnStatus.state === 'switching') {
-            hint = 'Switch scheduled. Wait for the service hand-off to complete before sending another request.';
+            hint = 'Switch scheduled. Wait for the service hand-off to complete.';
         }
         swapHint.textContent = hint;
     }
@@ -3556,6 +3985,7 @@ async function handlePwnSwap(targetMode) {
 
     try {
         const result = await postPwnAPI('/api/pwnagotchi/swap', { target: normalized });
+        if (normalized === 'pwnagotchi') _pwnSwapRequestedThisSession = true;
         const message = (result && result.message) ? result.message : `Switch scheduled to ${formatPwnModeLabel(normalized)}`;
         addConsoleMessage(message, 'info');
         if (result && result.status) {
@@ -3606,6 +4036,7 @@ async function loadConnectData() {
         console.log('Loading connect tab, refreshing connectivity status...');
         await Promise.all([
             refreshWifiStatus(),
+            refreshEthernetStatus(),
             refreshBluetoothStatus()
         ]);
     } catch (error) {
@@ -4701,6 +5132,57 @@ async function refreshWifiStatus() {
     setWifiInterfaceMetadata([]);
         renderDashboardMultiInterfaceSummary(null);
         renderConnectTabMultiInterface(null);
+    }
+}
+
+// ============================================================================
+// ETHERNET / LAN STATUS
+// ============================================================================
+
+async function refreshEthernetStatus() {
+    const indicator = document.getElementById('lan-status-indicator');
+    const info = document.getElementById('lan-info');
+    const listEl = document.getElementById('lan-interface-list');
+
+    try {
+        const data = await fetchAPI('/api/ethernet/status');
+
+        if (!indicator || !info) return;
+
+        if (data.active && data.active_interface) {
+            const iface = data.active_interface;
+            indicator.className = 'text-sm px-2 py-1 rounded bg-green-900/50 text-green-400';
+            indicator.textContent = 'Connected';
+            info.innerHTML = `<span class="text-green-400 font-medium">${iface.name}</span> &mdash; ${iface.ip_address || 'No IP'}`;
+            if (iface.network_cidr) {
+                info.innerHTML += `<br><span class="text-gray-500 text-xs">Network: ${iface.network_cidr}</span>`;
+            }
+        } else if (data.available) {
+            indicator.className = 'text-sm px-2 py-1 rounded bg-yellow-900/50 text-yellow-400';
+            indicator.textContent = 'No Link';
+            info.textContent = 'Ethernet interface found but no active connection';
+        } else {
+            indicator.className = 'text-sm px-2 py-1 rounded bg-gray-700 text-gray-400';
+            indicator.textContent = 'Not Found';
+            info.textContent = 'No Ethernet interfaces detected';
+        }
+
+        // Show interface list
+        if (listEl && data.interfaces && data.interfaces.length > 0) {
+            listEl.innerHTML = data.interfaces.map(iface => {
+                const statusColor = iface.connected ? 'text-green-400' : iface.has_carrier ? 'text-yellow-400' : 'text-gray-500';
+                const statusText = iface.connected ? 'Connected' : iface.has_carrier ? 'Link Up' : 'No Link';
+                const ip = iface.ip_address || '—';
+                return `<div class="flex justify-between"><span>${iface.name}</span><span>${ip}</span><span class="${statusColor}">${statusText}</span></div>`;
+            }).join('');
+            listEl.classList.remove('hidden');
+        }
+    } catch (e) {
+        if (indicator) {
+            indicator.className = 'text-sm px-2 py-1 rounded bg-red-900/50 text-red-400';
+            indicator.textContent = 'Error';
+        }
+        if (info) info.textContent = 'Failed to check Ethernet status';
     }
 }
 
@@ -7556,6 +8038,10 @@ function networkAwareFetch(endpoint, options = {}) {
 async function fetchAPI(endpoint, options = {}) {
     try {
         const response = await networkAwareFetch(endpoint, options);
+        if (response.status === 401) {
+            window.location.href = '/login';
+            throw new Error('Authentication required');
+        }
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -7575,6 +8061,10 @@ async function postAPI(endpoint, data) {
             },
             body: JSON.stringify(data)
         });
+        if (response.status === 401) {
+            window.location.href = '/login';
+            throw new Error('Authentication required');
+        }
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -7637,6 +8127,7 @@ function updateDashboardStatus(data) {
     updateConnectivityIndicator('bluetooth-status', data.bluetooth_active);
     updateConnectivityIndicator('usb-status', data.usb_active);
     updateConnectivityIndicator('pan-status', data.pan_connected);
+    updateLanIndicator(data);
 
     // Update the primary connection card
     updatePrimaryConnectionCard(data);
@@ -7778,8 +8269,31 @@ function updateConnectivityIndicator(id, active, ssid = null, apMode = false) {
     }
 }
 
+function updateLanIndicator(data) {
+    const dot = document.getElementById('lan-status');
+    const info = document.getElementById('lan-info-display');
+    if (!dot && !info) return;
+
+    if (data.ethernet_connected) {
+        if (dot) dot.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
+        if (info) {
+            const iface = data.ethernet_interface || 'eth0';
+            const ip = data.ethernet_ip || '';
+            info.textContent = ip ? `${iface}: ${ip}` : iface;
+            info.className = 'text-xs text-green-400 truncate';
+        }
+    } else {
+        if (dot) dot.className = 'w-3 h-3 bg-gray-600 rounded-full';
+        if (info) {
+            info.textContent = 'Not connected';
+            info.className = 'text-xs text-gray-500 truncate';
+        }
+    }
+}
+
 /**
- * Update the primary connection card on the dashboard
+ * Update the primary connection card on the dashboard.
+ * Priority: Ethernet > WiFi > USB/PAN > Bluetooth
  */
 function updatePrimaryConnectionCard(data) {
     const label = document.getElementById('primary-connection-label');
@@ -7790,39 +8304,40 @@ function updatePrimaryConnectionCard(data) {
 
     if (!label) return;
 
-    if (data.wifi_connected) {
+    const lanIcon = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"></path></svg>';
+    const wifiIcon = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>';
+
+    if (data.ethernet_connected) {
+        label.textContent = 'LAN';
+        name.textContent = data.ethernet_interface || 'Ethernet';
+        if (ip) ip.textContent = data.ethernet_ip || '';
+        if (status) status.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
+        if (icon) { icon.innerHTML = lanIcon; icon.className = 'text-green-400'; }
+    } else if (data.wifi_connected) {
         const ssid = data.current_ssid || 'Connected';
         label.textContent = data.ap_mode_active ? 'AP Mode' : 'WiFi';
         name.textContent = data.ap_mode_active ? `AP: ${data.ap_ssid || 'Ragnar'}` : ssid;
+        if (ip) ip.textContent = '';
         if (status) status.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
-        if (icon) icon.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>';
-        if (icon) icon.className = 'text-green-400';
+        if (icon) { icon.innerHTML = wifiIcon; icon.className = 'text-green-400'; }
     } else if (data.pan_connected) {
         label.textContent = 'USB/PAN';
         name.textContent = 'Connected via USB';
+        if (ip) ip.textContent = '';
         if (status) status.className = 'w-3 h-3 bg-green-500 rounded-full pulse-glow';
-        if (icon) icon.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>';
         if (icon) icon.className = 'text-yellow-400';
     } else if (data.bluetooth_active) {
         label.textContent = 'Bluetooth';
         name.textContent = 'Bluetooth active';
+        if (ip) ip.textContent = '';
         if (status) status.className = 'w-3 h-3 bg-blue-500 rounded-full pulse-glow';
         if (icon) icon.className = 'text-blue-400';
     } else {
         label.textContent = 'Disconnected';
         name.textContent = 'No active connection';
+        if (ip) ip.textContent = '';
         if (status) status.className = 'w-3 h-3 bg-gray-600 rounded-full';
         if (icon) icon.className = 'text-gray-500';
-    }
-
-    // Try to show IP from WiFi status if we have it cached
-    if (ip) {
-        const ssidDisplay = document.getElementById('wifi-ssid-display');
-        if (data.wifi_connected && ssidDisplay && ssidDisplay.textContent && ssidDisplay.textContent !== 'Not connected') {
-            ip.textContent = '';  // IP will be filled by wifi detail fetch if available
-        } else {
-            ip.textContent = '';
-        }
     }
 }
 
@@ -9181,6 +9696,38 @@ function updateSystemOverview(data) {
     if (diskDetails) diskDetails.textContent = `${data.disk.used_formatted} / ${data.disk.total_formatted}`;
     if (diskProgress) diskProgress.style.width = `${data.disk.percent}%`;
     
+    // Battery (PiSugar - only shown when connected)
+    const batteryCard = document.getElementById('battery-card');
+    if (batteryCard) {
+        if (data.battery) {
+            batteryCard.classList.remove('hidden');
+            const lvl = data.battery.level;
+            const charging = data.battery.charging;
+            const batteryUsage = document.getElementById('battery-usage');
+            const batteryDetails = document.getElementById('battery-details');
+            const batteryProgress = document.getElementById('battery-progress');
+            const batteryIcon = document.getElementById('battery-icon');
+
+            if (batteryUsage) batteryUsage.textContent = `${lvl}%`;
+            if (batteryDetails) {
+                let detail = charging ? 'Charging' : 'On battery';
+                if (data.battery.voltage) detail += ` (${data.battery.voltage}V)`;
+                batteryDetails.textContent = detail;
+            }
+            if (batteryProgress) {
+                batteryProgress.style.width = `${lvl}%`;
+                batteryProgress.className = 'h-2 rounded-full transition-all duration-300 ' +
+                    (lvl <= 20 ? 'bg-red-500' : lvl <= 50 ? 'bg-yellow-500' : 'bg-emerald-500');
+            }
+            if (batteryIcon) {
+                batteryIcon.className = 'w-5 h-5 ' +
+                    (lvl <= 20 ? 'text-red-400' : lvl <= 50 ? 'text-yellow-400' : 'text-emerald-400');
+            }
+        } else {
+            batteryCard.classList.add('hidden');
+        }
+    }
+
     // Uptime
     const uptimeDisplay = document.getElementById('uptime-display');
     if (uptimeDisplay) uptimeDisplay.textContent = data.uptime.formatted;

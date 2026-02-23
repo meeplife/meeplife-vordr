@@ -31,8 +31,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Tuple
 from contextlib import contextmanager
 from email.utils import format_datetime
-from flask import Flask, render_template, jsonify, request, send_from_directory, Response, make_response, g
-from flask_socketio import SocketIO, emit
+from flask import Flask, render_template, jsonify, request, send_from_directory, Response, make_response, g, session, redirect
+from flask_socketio import SocketIO, emit, disconnect
 try:
     from flask_cors import CORS  # type: ignore
     flask_cors_available = True
@@ -57,16 +57,21 @@ from lynis_parser import parse_lynis_dat
 from actions.lynis_pentest_ssh import LynisPentestSSH
 from actions.connector_utils import CredentialChecker
 from db_manager import get_db, DatabaseManager
+from auth_manager import AuthManager
 
 # Initialize logger
 logger = Logger(name="webapp_modern.py", level=logging.DEBUG)
+
+# Initialize auth manager
+auth_mgr = AuthManager(shared_data)
 
 # Initialize Flask app
 app = Flask(__name__,
             static_folder='web',
             template_folder='web')
-app.config['SECRET_KEY'] = 'ragnar-cyberviking-secret-key'
+app.config['SECRET_KEY'] = auth_mgr.get_or_create_secret_key()
 app.config['JSON_SORT_KEYS'] = False
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 
 # Enable CORS
 # Set up CORS if available
@@ -75,6 +80,33 @@ if flask_cors_available:
 
 # Initialize SocketIO for real-time updates
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# ============================================================================
+# AUTHENTICATION MIDDLEWARE
+# ============================================================================
+
+@app.before_request
+def check_authentication():
+    """Enforce authentication on all endpoints when auth is configured."""
+    if not auth_mgr.is_configured():
+        return  # No auth set up yet, allow everything
+
+    # Whitelist: paths that must be accessible without authentication
+    path = request.path
+    whitelist_prefixes = ['/login', '/api/auth/', '/api/kill']
+    if any(path.startswith(p) for p in whitelist_prefixes):
+        return
+
+    # Static assets needed for login page (CSS, JS, images, fonts)
+    static_prefixes = ['/css/', '/images/', '/scripts/', '/fonts/']
+    if any(path.startswith(p) for p in static_prefixes):
+        return
+
+    # Check if user is authenticated via Flask session
+    if not session.get('authenticated'):
+        if path.startswith('/api/'):
+            return jsonify({'error': 'Unauthorized', 'auth_required': True}), 401
+        return redirect('/login')
 
 # Initialize web utilities
 web_utils = WebUtils(shared_data, logger)
@@ -106,7 +138,7 @@ SEP_SCAN_COMMAND = ['sudo', 'sep-scan']
 MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 PWN_INSTALL_SCRIPT = os.path.join(shared_data.currentdir, 'scripts', 'install_pwnagotchi.sh')
 PWN_SERVICE_FILE = '/etc/systemd/system/pwnagotchi.service'
-PWN_SWAP_DELAY_SECONDS = 5
+PWN_SWAP_DELAY_SECONDS = 1
 PWN_INSTALL_STALE_SECONDS = 600  # Treat installer as stale after 10 minutes
 PWN_SWITCH_STALE_SECONDS = 60  # Consider switch stuck after 60 seconds
 RELEASE_GATE_DEFAULT_MESSAGE = (
@@ -385,7 +417,7 @@ def _build_pwnagotchi_status(persist: bool = True) -> dict:
         'state': 'not_installed',
         'message': 'Pwnagotchi is not installed',
         'phase': 'idle',
-        'installed': bool(shared_data.config.get('pwnagotchi_installed', False)),
+        'installed': os.path.isdir('/opt/pwnagotchi') and os.path.exists(PWN_SERVICE_FILE),
         'installing': False,
         'mode': shared_data.config.get('pwnagotchi_mode', 'ragnar'),
         'last_switch': shared_data.config.get('pwnagotchi_last_switch', ''),
@@ -511,7 +543,8 @@ def _build_pwnagotchi_status(persist: bool = True) -> dict:
 
     status['installed'] = (
         status['installed']
-        or state in {'installed', 'running'}
+        or state == 'installed'
+        or status['service_active']
         or status['service_enabled']
         or service_file_exists
     )
@@ -704,7 +737,7 @@ def _format_service_failure_message(service_name: str) -> str:
     return f"Failed to start {readable} service. Review journalctl -u {unit} -f for details."
 
 
-def _wait_for_service_active(service_name: str, timeout: int = 45, poll_interval: int = 3) -> tuple[bool, str]:
+def _wait_for_service_active(service_name: str, timeout: int = 30, poll_interval: int = 1) -> tuple[bool, str]:
     deadline = time.monotonic() + timeout
     last_state = ''
     while time.monotonic() < deadline:
@@ -719,7 +752,7 @@ def _wait_for_service_active(service_name: str, timeout: int = 45, poll_interval
     return False, _collect_service_status(service_name) or f"{service_name} did not become active within {timeout}s (last state: {last_state})"
 
 
-def _start_service_with_monitor(service_name: str, timeout: int = 45) -> tuple[bool, str]:
+def _start_service_with_monitor(service_name: str, timeout: int = 30) -> tuple[bool, str]:
     start_proc = _run_systemctl(['start', service_name])
     if start_proc.returncode != 0:
         detail = start_proc.stderr.strip() or start_proc.stdout.strip() or f"systemctl start {service_name} failed with {start_proc.returncode}"
@@ -738,26 +771,68 @@ def _stop_service(service_name: str) -> tuple[bool, str]:
     return True, 'stopped'
 
 
-def _deferred_self_stop(delay: int = 3) -> None:
-    """Stop the ragnar.service via a detached shell process.
+def _deferred_self_stop(delay: int = 1) -> None:
+    """Stop the ragnar.service via a systemd-run transient unit.
 
     Because Ragnar is stopping *itself*, a direct systemctl stop kills the
-    thread before status files and config can be persisted.  Instead we
-    launch a tiny background shell that sleeps briefly then issues the stop,
-    giving the caller time to finish clean-up work first.
+    thread before status files and config can be persisted.  We use
+    systemd-run so the stop command runs in its own cgroup — completely
+    outside ragnar.service — and survives ragnar's cgroup teardown.
+    subprocess.Popen with start_new_session=True is NOT sufficient: it
+    creates a new session but inherits the same cgroup, so systemd kills
+    it when tearing down ragnar.service.
     """
     try:
         subprocess.Popen(
-            ['bash', '-c', f'sleep {delay} && sudo systemctl stop ragnar.service'],
+            ['systemd-run', '--no-block', '--collect',
+             '--unit=ragnar-deferred-stop',
+             'bash', '-c', f'sleep {delay} && systemctl stop ragnar.service'],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,  # detach from Ragnar's process group
         )
-        logger.info(f"Scheduled deferred ragnar.service stop in {delay}s (detached)")
+        logger.info(f"Scheduled deferred ragnar.service stop in {delay}s (systemd-run)")
     except Exception as exc:
         logger.error(f"Failed to schedule deferred ragnar.service stop: {exc}")
         # Last resort: try direct stop (may be interrupted)
         _stop_service('ragnar.service')
+
+
+def _show_epaper_transition(message: str) -> None:
+    """Write a transition message to the e-paper display before swapping services."""
+    try:
+        display = getattr(shared_data, 'display_instance', None)
+        if not display:
+            return
+        epd_helper = getattr(shared_data, 'epd_helper', None)
+        if not epd_helper:
+            return
+
+        from PIL import Image, ImageDraw, ImageFont
+        width = shared_data.config.get('ref_width', 122)
+        height = shared_data.config.get('ref_height', 250)
+        image = Image.new('1', (height, width), 255)  # landscape orientation
+        draw = ImageDraw.Draw(image)
+
+        # Use system font or fallback
+        try:
+            font = ImageFont.truetype(getattr(shared_data, 'font_arial_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'), 14)
+            font_small = ImageFont.truetype(getattr(shared_data, 'font_arial_path', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'), 10)
+        except Exception:
+            font = ImageFont.load_default()
+            font_small = font
+
+        # Center the message
+        draw.text((10, width // 2 - 20), message, font=font, fill=0)
+        draw.text((10, width // 2 + 5), "Please wait...", font=font_small, fill=0)
+
+        # Handle screen flip
+        if shared_data.config.get('screen_reversed', False):
+            image = image.rotate(180)
+
+        epd_helper.display_full(image)
+        logger.info(f"E-paper transition: {message}")
+    except Exception as e:
+        logger.debug(f"E-paper transition message failed (non-fatal): {e}")
 
 
 def _execute_pwn_mode_switch(target_mode: str) -> None:
@@ -766,26 +841,45 @@ def _execute_pwn_mode_switch(target_mode: str) -> None:
 
     if target_mode == 'pwnagotchi':
         _ensure_pwn_launcher()
-        success, detail = _start_service_with_monitor('pwnagotchi.service')
-        if success:
-            logger.info("Pwnagotchi service reported active; starting bettercap and scheduling Ragnar stop")
-            _start_service_with_monitor('bettercap.service')
-            # Write status and config BEFORE stopping ourselves
-            message = 'Pwnagotchi service is running'
-            _write_pwn_status_file('running', message, 'swap', {'target_mode': 'pwnagotchi'})
-            _update_pwn_config({'pwnagotchi_mode': 'pwnagotchi', 'pwnagotchi_last_status': message})
-            _emit_pwn_status_update()
-            # Stop Ragnar via detached process so the above writes complete
-            _deferred_self_stop()
-            return
-        else:
-            logger.error(f"Pwnagotchi service failed to start: {detail}")
-            failure_message = _format_service_failure_message('pwnagotchi.service')
-            extra = {'target_mode': 'ragnar'}
-            if detail:
-                extra['service_error_detail'] = detail
-            _write_pwn_status_file('error', failure_message, 'error', extra)
-            _update_pwn_config({'pwnagotchi_mode': 'ragnar', 'pwnagotchi_last_status': failure_message})
+
+        # Show transition message on e-paper before Ragnar stops.
+        # Run in a thread with a timeout so a blocked SPI bus never hangs the swap.
+        _epd_t = threading.Thread(target=_show_epaper_transition, args=("Switching to Pwnagotchi...",), daemon=True)
+        _epd_t.start()
+        _epd_t.join(timeout=4)
+
+        # Write status and config BEFORE stopping ourselves
+        message = 'Pwnagotchi starting up...'
+        _write_pwn_status_file('switching', message, 'swap', {'target_mode': 'pwnagotchi'})
+        _update_pwn_config({'pwnagotchi_mode': 'pwnagotchi', 'pwnagotchi_last_status': message})
+        _emit_pwn_status_update()
+
+        # Stop Ragnar first so it releases the GPIO/e-paper display, then start
+        # pwnagotchi and bettercap.  Starting them before Ragnar stops causes a
+        # 'GPIO busy' crash because both processes fight over the display pins.
+        #
+        # IMPORTANT: subprocess.Popen with start_new_session=True creates a new
+        # session but NOT a new cgroup.  When systemd stops ragnar.service it
+        # kills every process in the cgroup — including any bash child — so the
+        # "&& start pwnagotchi" tail would never execute.  systemd-run launches
+        # the sequence in its own transient cgroup, fully outside ragnar.service,
+        # so it survives ragnar's cgroup teardown.
+        try:
+            subprocess.Popen(
+                ['systemd-run', '--no-block', '--collect',
+                 '--unit=ragnar-to-pwnagotchi-swap',
+                 'bash', '-c',
+                 'sleep 1 && systemctl stop ragnar.service'
+                 ' && sleep 3'
+                 ' && systemctl start bettercap.service'
+                 ' && systemctl start pwnagotchi.service'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("Scheduled systemd-run swap: stop ragnar → start pwnagotchi")
+        except Exception as exc:
+            logger.error(f"Failed to schedule pwnagotchi start sequence: {exc}")
+        return
     else:
         success, detail = _start_service_with_monitor('ragnar.service')
         if success:
@@ -1657,6 +1751,22 @@ def ensure_recent_sync(max_age=SYNC_BACKGROUND_INTERVAL):
 _wifi_ssid_cache = {'ssid': None, 'timestamp': 0}
 _WIFI_SSID_CACHE_TTL = 60
 
+def _get_active_ethernet_ip():
+    """Get the IP of the active ethernet interface, or empty string."""
+    try:
+        iface = get_active_ethernet_interface()
+        return iface.get('ip_address', '') if iface else ''
+    except Exception:
+        return ''
+
+def _get_active_ethernet_name():
+    """Get the name of the active ethernet interface, or empty string."""
+    try:
+        iface = get_active_ethernet_interface()
+        return iface.get('name', '') if iface else ''
+    except Exception:
+        return ''
+
 def get_current_wifi_ssid():
     """Get the current WiFi SSID for file naming"""
     global _wifi_ssid_cache
@@ -2337,6 +2447,136 @@ def is_ap_client_request():
 
 
 # ============================================================================
+# AUTHENTICATION ROUTES
+# ============================================================================
+
+@app.route('/login')
+def login_page():
+    """Serve the login page."""
+    if not auth_mgr.is_configured():
+        return redirect('/')
+    if session.get('authenticated'):
+        return redirect('/')
+    return send_from_directory('web', 'login.html')
+
+
+@app.route('/api/auth/status', methods=['GET'])
+def auth_status():
+    """Get current authentication status."""
+    return jsonify(auth_mgr.get_auth_status(session))
+
+
+@app.route('/api/auth/setup', methods=['POST'])
+def auth_setup():
+    """Initial authentication setup - creates user, encrypts DB, generates recovery codes."""
+    if auth_mgr.is_configured():
+        return jsonify({'success': False, 'error': 'Authentication is already configured'}), 400
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    confirm = data.get('confirm_password', '')
+
+    if password != confirm:
+        return jsonify({'success': False, 'error': 'Passwords do not match'}), 400
+
+    result = auth_mgr.setup(username, password)
+    if result['success']:
+        # Auto-login after setup
+        session['authenticated'] = True
+        session['username'] = username
+        session['login_time'] = time.time()
+        session.permanent = True
+        return jsonify(result)
+    else:
+        return jsonify(result), 400
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    """Login with username and password."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+
+    result = auth_mgr.login(username, password)
+    if result['success']:
+        session['authenticated'] = True
+        session['username'] = username
+        session['login_time'] = time.time()
+        session.permanent = True
+        return jsonify(result)
+    else:
+        return jsonify(result), 401
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    """Logout - clear session immediately, encrypt database in background."""
+    session.clear()
+    # Encrypt DB in background so the response isn't blocked
+    threading.Thread(target=auth_mgr.logout, daemon=True).start()
+    return jsonify({'success': True})
+
+
+@app.route('/api/auth/change-password', methods=['POST'])
+def auth_change_password():
+    """Change the user's password."""
+    if not session.get('authenticated'):
+        return jsonify({'success': False, 'error': 'Not authenticated'}), 401
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    result = auth_mgr.change_password(
+        data.get('current_password', ''),
+        data.get('new_password', '')
+    )
+    return jsonify(result) if result['success'] else (jsonify(result), 400)
+
+
+@app.route('/api/auth/recover', methods=['POST'])
+def auth_recover():
+    """Use a recovery code to reset password and login."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    result = auth_mgr.recover(
+        data.get('username', '').strip(),
+        data.get('recovery_code', '').strip(),
+        data.get('new_password', '')
+    )
+    if result['success']:
+        session['authenticated'] = True
+        session['username'] = data.get('username', '').strip()
+        session['login_time'] = time.time()
+        session.permanent = True
+    return jsonify(result) if result['success'] else (jsonify(result), 400)
+
+
+@app.route('/api/auth/regenerate-recovery', methods=['POST'])
+def auth_regenerate_recovery():
+    """Generate new recovery codes (requires current password)."""
+    if not session.get('authenticated'):
+        return jsonify({'success': False, 'error': 'Not authenticated'}), 401
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+    result = auth_mgr.regenerate_recovery_codes(data.get('password', ''))
+    return jsonify(result) if result['success'] else (jsonify(result), 400)
+
+
+# ============================================================================
 # STATIC FILE ROUTES
 # ============================================================================
 
@@ -2433,6 +2673,9 @@ def get_status():
             'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
             'wifi_connected': safe_bool(shared_data.wifi_connected),
             'current_ssid': safe_str(getattr(shared_data, 'current_wifi_ssid', '') or get_current_wifi_ssid() or ''),
+            'ethernet_connected': safe_bool(is_ethernet_available()),
+            'ethernet_ip': _get_active_ethernet_ip(),
+            'ethernet_interface': _get_active_ethernet_name(),
             'bluetooth_active': safe_bool(shared_data.bluetooth_active),
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
@@ -8775,11 +9018,19 @@ def legacy_netkb_json():
 
 @socketio.on('connect')
 def handle_connect():
-    """Handle client connection"""
+    """Handle client connection - reject if auth is configured but not authenticated"""
+    if auth_mgr.is_configured() and not session.get('authenticated'):
+        logger.warning("Rejected unauthenticated WebSocket connection")
+        disconnect()
+        return False
+
     global clients_connected
     clients_connected += 1
     logger.info(f"Client connected. Total clients: {clients_connected}")
-    emit('connected', {'message': 'Connected to Ragnar'})
+    emit('connected', {
+        'message': 'Connected to Ragnar',
+        'auth_configured': auth_mgr.is_configured()
+    })
 
     # Send initial data to new client
     try:
@@ -9014,6 +9265,9 @@ def get_current_status():
         'bluetooth_active': safe_bool(shared_data.bluetooth_active),
         'pan_connected': safe_bool(shared_data.pan_connected),
         'usb_active': safe_bool(shared_data.usb_active),
+        'ethernet_connected': safe_bool(is_ethernet_available()),
+        'ethernet_ip': _get_active_ethernet_ip(),
+        'ethernet_interface': _get_active_ethernet_name(),
         'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
         'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
         'release_gate': _build_release_gate_payload(),
@@ -10494,6 +10748,24 @@ def get_system_status_api():
         except:
             temperature_data = {}
         
+        # Battery (PiSugar UPS - only if connected)
+        battery_data = None
+        try:
+            ragnar_inst = getattr(shared_data, 'ragnar_instance', None)
+            pisugar = getattr(ragnar_inst, 'pisugar_listener', None) if ragnar_inst else None
+            if pisugar and pisugar.available:
+                level = pisugar.get_battery_level()
+                if level is not None:
+                    voltage = pisugar.get_battery_voltage()
+                    battery_data = {
+                        'level': round(level, 1),
+                        'charging': bool(pisugar.is_charging()),
+                        'voltage': round(voltage, 2) if voltage is not None else None,
+                        'model': pisugar.get_model(),
+                    }
+        except Exception:
+            pass
+
         # Network interface details
         network_interfaces = []
         for interface, addrs in net_if.items():
@@ -10559,7 +10831,8 @@ def get_system_status_api():
             },
             'processes': processes,
             'network_interfaces': network_interfaces,
-            'temperatures': temperature_data
+            'temperatures': temperature_data,
+            'battery': battery_data
         }
         
         return jsonify(system_status)
@@ -11544,6 +11817,63 @@ def get_zap_status():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/zap/logs')
+def get_zap_logs():
+    """Get ZAP-related log entries from the advanced_vuln_scanner log file.
+    
+    Filters for [ZAP-START], [ZAP-CLEANUP] and other ZAP-related lines 
+    to help diagnose startup/crash issues.
+    
+    Query params:
+        lines: max lines to return (default 200)
+        filter: additional keyword filter (optional)
+    """
+    try:
+        max_lines = min(int(request.args.get('lines', 200)), 2000)
+        extra_filter = request.args.get('filter', '').strip()
+        
+        log_path = os.path.join(shared_data.logsdir, 'advanced_vuln_scanner.log')
+        if not os.path.exists(log_path):
+            return jsonify({
+                'success': True,
+                'logs': [],
+                'message': 'No advanced_vuln_scanner.log file found'
+            })
+        
+        # ZAP-related keywords to match
+        zap_keywords = [
+            '[ZAP-START]', '[ZAP-CLEANUP]', 'ZAP', 'zap_full', 'zap_spider',
+            'zap_active', 'start_zap', 'stop_zap', '_zap_', 'zap daemon',
+            'port 8090'
+        ]
+        
+        matched_lines = []
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                line_lower = line.lower()
+                if any(kw.lower() in line_lower for kw in zap_keywords):
+                    if extra_filter and extra_filter.lower() not in line_lower:
+                        continue
+                    matched_lines.append(line)
+        
+        # Return the most recent entries
+        recent = matched_lines[-max_lines:]
+        
+        return jsonify({
+            'success': True,
+            'logs': recent,
+            'total_matched': len(matched_lines),
+            'returned': len(recent),
+            'log_file': log_path
+        })
+    except Exception as e:
+        logger.error(f"Error reading ZAP logs: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/zap/alerts')
 def get_zap_alerts():
     """Get raw ZAP alerts for debugging"""
@@ -12327,6 +12657,9 @@ def get_dashboard_quick():
             'bluetooth_active': safe_bool(shared_data.bluetooth_active),
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
+            'ethernet_connected': safe_bool(is_ethernet_available()),
+            'ethernet_ip': _get_active_ethernet_ip(),
+            'ethernet_interface': _get_active_ethernet_name(),
             'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
             'release_gate': _build_release_gate_payload(),
             'timestamp': datetime.now().isoformat()
@@ -13097,6 +13430,37 @@ def generate_self_signed_cert(cert_path: str, key_path: str):
         return False
 
 
+def _resolve_bind_address(interface_name: str) -> str:
+    """Resolve a network interface name (e.g. 'wlan0') to its IPv4 address.
+    Returns '0.0.0.0' if the interface has no IP or doesn't exist."""
+    if not interface_name:
+        return '0.0.0.0'
+    try:
+        import netifaces
+        addrs = netifaces.ifaddresses(interface_name)
+        ipv4_list = addrs.get(netifaces.AF_INET, [])
+        if ipv4_list:
+            return ipv4_list[0].get('addr', '0.0.0.0')
+    except Exception:
+        pass
+    # Fallback: parse ip addr output
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['ip', '-4', '-o', 'addr', 'show', interface_name],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            # Format: "4: wlan0    inet 192.168.1.211/24 ..."
+            for part in result.stdout.split():
+                if '.' in part and '/' in part:
+                    return part.split('/')[0]
+    except Exception:
+        pass
+    logger.warning(f"Could not resolve IP for interface '{interface_name}', falling back to 0.0.0.0")
+    return '0.0.0.0'
+
+
 def run_server(host='0.0.0.0', port=8000, ssl_cert=None, ssl_key=None, https_port=None):
     """
     Run the Flask server with optional HTTPS support.
@@ -13109,6 +13473,15 @@ def run_server(host='0.0.0.0', port=8000, ssl_cert=None, ssl_key=None, https_por
         https_port: HTTPS port (default: None, uses port+443-80 if SSL enabled)
     """
     try:
+        # Bind to a specific interface if configured
+        bind_iface = shared_data.config.get('web_bind_interface', '')
+        if bind_iface:
+            resolved = _resolve_bind_address(bind_iface)
+            if resolved != '0.0.0.0':
+                host = resolved
+                logger.info(f"Binding web server to interface {bind_iface} ({host})")
+            else:
+                logger.warning(f"Interface '{bind_iface}' has no IP, binding to all interfaces")
         # Determine SSL configuration
         ssl_context = None
         use_https = False

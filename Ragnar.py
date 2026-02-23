@@ -46,13 +46,21 @@ class Ragnar:
         self.orchestrator_thread = None
         self.orchestrator = None
         self.wifi_manager = WiFiManager(shared_data)
-        
+
         # Set reference to this instance in shared_data for other modules
         self.shared_data.ragnar_instance = self
         self.shared_data.headless_mode = False
-        
+
         # Reference to display instance (will be set when display is started)
         self.display = None
+
+        # PiSugar button listener (for Ragnar/Pwnagotchi swap via hardware button)
+        self.pisugar_listener = None
+        try:
+            from pisugar_button import PiSugarButtonListener
+            self.pisugar_listener = PiSugarButtonListener(shared_data)
+        except ImportError:
+            pass
 
     def run(self):
         """Main loop for Ragnar. Waits for Wi-Fi connection and starts Orchestrator."""
@@ -60,6 +68,10 @@ class Ragnar:
         logger.info("RAGNAR MAIN THREAD STARTING")
         logger.info("=" * 70)
         
+        # Start PiSugar button listener (if available)
+        if self.pisugar_listener:
+            self.pisugar_listener.start()
+
         # Initialize Wi-Fi management system
         logger.info("Starting Wi-Fi management system...")
         self.wifi_manager.start()
@@ -134,10 +146,14 @@ class Ragnar:
     def stop(self):
         """Stop Ragnar and cleanup all resources."""
         logger.info("Stopping Ragnar...")
-        
+
+        # Stop PiSugar listener
+        if self.pisugar_listener:
+            self.pisugar_listener.stop()
+
         # Stop orchestrator
         self.stop_orchestrator()
-        
+
         # Stop Wi-Fi manager
         if hasattr(self, 'wifi_manager'):
             self.wifi_manager.stop()
@@ -175,41 +191,71 @@ class Ragnar:
 def handle_exit(sig, frame, display_thread, ragnar_thread, web_thread):
     """Handles the termination of the main, display, and web threads."""
     logger.info("Received exit signal, initiating clean shutdown...")
-    
+
     # Stop Ragnar instance first
     if hasattr(shared_data, 'ragnar_instance') and shared_data.ragnar_instance:
         shared_data.ragnar_instance.stop()
-    
+
     # Set all exit flags
     shared_data.should_exit = True
     shared_data.orchestrator_should_exit = True
     shared_data.display_should_exit = True
     shared_data.webapp_should_exit = True
-    
-    # Stop individual threads
+
+    # Encrypt database on shutdown if auth is configured
+    try:
+        from webapp_modern import auth_mgr
+        auth_mgr.shutdown_encrypt()
+    except Exception as e:
+        logger.error(f"Shutdown encryption failed: {e}")
+
+    # Stop individual threads (fast timeouts - systemd will SIGKILL after 5s anyway)
     handle_exit_display(sig, frame, display_thread, exit_process=False)
-    
+
     if display_thread and display_thread.is_alive():
-        display_thread.join(timeout=5)
+        display_thread.join(timeout=1)
     if ragnar_thread and ragnar_thread.is_alive():
-        ragnar_thread.join(timeout=5)
+        ragnar_thread.join(timeout=1)
     if web_thread and web_thread.is_alive():
-        web_thread.join(timeout=5)
-    
+        web_thread.join(timeout=1)
+
     logger.info("Main loop finished. Clean exit.")
     sys.exit(0)
 
 
 
+def _atexit_encrypt():
+    """Safety net: encrypt DB on process exit if auth is configured."""
+    try:
+        from webapp_modern import auth_mgr
+        auth_mgr.shutdown_encrypt()
+    except Exception:
+        pass
+
+atexit.register(_atexit_encrypt)
+
 if __name__ == "__main__":
     # Load environment variables from .env file at the very beginning
     load_env()
-    
+
     logger.info("Starting threads")
 
     try:
         logger.info("Loading shared data config...")
         shared_data.load_config()
+
+        # Clean up leftover pwnagotchi state (mon0, services)
+        logger.info("Cleaning up leftover pwnagotchi state...")
+        try:
+            subprocess.run(['ip', 'link', 'set', 'mon0', 'down'], capture_output=True, timeout=5)
+            subprocess.run(['iw', 'mon0', 'del'], capture_output=True, timeout=5)
+        except Exception:
+            pass
+        try:
+            subprocess.run(['systemctl', 'stop', 'pwnagotchi'], capture_output=True, timeout=10)
+            subprocess.run(['systemctl', 'stop', 'bettercap'], capture_output=True, timeout=10)
+        except Exception:
+            pass
 
         logger.info("Starting display thread...")
         shared_data.display_should_exit = False  # Initialize display should_exit

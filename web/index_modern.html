@@ -294,6 +294,9 @@
                     <button onclick="showTab('config')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="config">
                         Config
                     </button>
+                    <button id="logout-btn" onclick="handleLogout()" class="hidden nav-btn px-4 py-2 rounded-lg hover:bg-red-700 bg-red-600/50 transition-colors text-red-200">
+                        Logout
+                    </button>
                 </div>
                 
                 <!-- Mobile Menu Button -->
@@ -325,6 +328,7 @@
                 <button onclick="showTab('system')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">System</button>
                 <button onclick="showTab('connect')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Connect</button>
                 <button onclick="showTab('config')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Config</button>
+                <button id="mobile-logout-btn" onclick="handleLogout()" class="hidden block w-full text-left px-3 py-2 rounded-lg hover:bg-red-700 bg-red-600/30 text-red-300">Logout</button>
             </div>
         </div>
     </nav>
@@ -1950,6 +1954,21 @@
                         </div>
                     </div>
                     
+                    <!-- Battery Card (PiSugar - shown only when detected) -->
+                    <div id="battery-card" class="glass-card p-4 hidden">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="font-semibold text-sm">Battery</h3>
+                            <svg id="battery-icon" class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 6h16a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V7a1 1 0 011-1zm18 4v4" />
+                            </svg>
+                        </div>
+                        <div class="text-2xl font-bold" id="battery-usage">--</div>
+                        <div class="text-xs text-gray-400" id="battery-details">PiSugar</div>
+                        <div class="w-full bg-gray-700 rounded-full h-2 mt-2">
+                            <div id="battery-progress" class="bg-emerald-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+
                     <!-- Uptime Card -->
                     <div class="glass-card p-4">
                         <div class="flex items-center justify-between mb-2">
@@ -3345,6 +3364,26 @@
                     </div>
                 </div>
 
+                <!-- Security Section (collapsible) -->
+                <div class="mb-8">
+                    <div class="glass rounded-lg overflow-hidden">
+                        <button onclick="toggleSecuritySection()" class="w-full flex items-center justify-between p-4 hover:bg-slate-700/30 transition-colors cursor-pointer">
+                            <div class="flex items-center gap-3">
+                                <svg id="security-chevron" class="w-5 h-5 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                                </svg>
+                                <h3 class="text-xl font-semibold text-Ragnar-400">Security</h3>
+                            </div>
+                            <span id="security-badge" class="hidden text-xs font-semibold uppercase tracking-wide px-3 py-1 rounded-full bg-green-900/40 text-green-400 border border-green-700">Enabled</span>
+                        </button>
+                        <div id="security-summary" class="px-4 pb-4">
+                            <p class="text-sm text-red-400">Set up authentication to protect your Ragnar instance. Once enabled, all access will require login. The database will be encrypted and bound to this hardware.</p>
+                        </div>
+                        <div id="security-config-content" class="hidden px-4 pb-4">
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Pwnagotchi Bridge Section -->
                 <div id="pwnagotchi-section" class="mb-8" style="display: none;">
                     <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -3398,15 +3437,15 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="glass rounded-lg p-4">
-                            <h4 class="font-medium text-lg mb-2">Install or Repair</h4>
+                        <div id="pwn-install-card" class="glass rounded-lg p-4">
+                            <h4 class="font-medium text-lg mb-2">Install</h4>
                             <p class="text-sm text-gray-400 mb-4">Run the bundled installer to fetch dependencies, clone Pwnagotchi, and stage services. This can take 20 - 40 minutes on a Raspberry Pi. Note that the Ragnar web might be unresponsive or slow during this process.</p>
                             <button id="pwn-install-btn" class="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-lg transition-colors">
                                 Install Pwnagotchi
                             </button>
                             <p id="pwn-install-note" class="text-xs text-gray-500 mt-3">Installer runs in the background and updates the status card as it progresses.</p>
                         </div>
-                        <div class="glass rounded-lg p-4">
+                        <div id="pwn-swap-card" class="glass rounded-lg p-4">
                             <h4 class="font-medium text-lg mb-2">Swap Control</h4>
                             <p class="text-sm text-gray-400 mb-4">Trigger a graceful hand-off between Ragnar and Pwnagotchi. Ragnar UI will stop responding once the switch begins, so plan to reboot back via SSH.</p>
                             <div>

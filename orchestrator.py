@@ -441,6 +441,23 @@ class Orchestrator:
             self.shared_data.ragnarstatustext2 = ""
             return
 
+        # Check if ethernet should be the default scan interface
+        preferred = multi_state.get_preferred_scan_interface()
+        if preferred and preferred.get('type') == 'ethernet' and preferred.get('ip_address'):
+            from multi_interface import ScanJob
+            eth_job = ScanJob(
+                interface=preferred['name'],
+                ssid='LAN',
+                role='ethernet',
+                ip_address=preferred.get('ip_address'),
+                cidr=preferred.get('cidr'),
+                network_cidr=preferred.get('network_cidr'),
+                interface_type='ethernet',
+            )
+            logger.info(f"→ Default scan using preferred ethernet: {preferred['name']}")
+            self.network_scanner.scan(job=eth_job)
+            return
+
         self.network_scanner.scan()
 
     def _iter_action_contexts(self):

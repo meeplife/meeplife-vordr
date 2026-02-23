@@ -690,6 +690,13 @@ setup_ragnar() {
         log "WARNING" "You can install it manually later with: sudo pip3 install --break-system-packages --ignore-installed openai>=2.0.0"
     }
 
+    # Install cryptography package for authentication and database encryption
+    log "INFO" "Installing cryptography package for authentication..."
+    sudo pip3 install --break-system-packages "cryptography>=41.0.0" || {
+        log "WARNING" "Failed to install cryptography package. Authentication features may not work."
+        log "WARNING" "You can install it manually later with: sudo pip3 install --break-system-packages cryptography>=41.0.0"
+    }
+
     # Verify Waveshare e-Paper Python library (already installed in main())
     if [ "$HEADLESS_MODE" = true ] || [ -z "${EPD_VERSION:-}" ]; then
         log "INFO" "Headless mode or unknown E-Paper version detected - skipping driver verification"
@@ -884,7 +891,7 @@ setup_services() {
     local entrypoint_file="$RAGNAR_ENTRYPOINT"
     local wipe_exec=""
     if [ "$HEADLESS_MODE" != true ]; then
-        wipe_exec="ExecStartPre=/usr/bin/python3 -OO /home/ragnar/Ragnar/wipe_epd.py"
+        wipe_exec="yes"
     fi
     
     # Create kill_port_8000.sh script
@@ -904,17 +911,17 @@ EOF
     cat > /etc/systemd/system/ragnar.service << EOF
 [Unit]
 Description=ragnar Service
-DefaultDependencies=no
-Before=basic.target
-After=local-fs.target
+After=multi-user.target
 
 [Service]
-ExecStartPre=/home/ragnar/Ragnar/kill_port_8000.sh
+ExecStartPre=-/home/ragnar/Ragnar/kill_port_8000.sh
+ExecStartPre=-/bin/bash -c 'ip link set mon0 down 2>/dev/null; iw mon0 del 2>/dev/null; systemctl stop pwnagotchi 2>/dev/null; systemctl stop bettercap 2>/dev/null; true'
 EOF
 
     if [ -n "$wipe_exec" ]; then
+        # Prefix with - so wipe_epd failure does not block service start
         cat >> /etc/systemd/system/ragnar.service << EOF
-$wipe_exec
+ExecStartPre=-/usr/bin/python3 -OO /home/ragnar/Ragnar/wipe_epd.py
 EOF
     fi
 
@@ -924,7 +931,10 @@ WorkingDirectory=/home/ragnar/Ragnar
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
+RestartSec=3
 User=root
+TimeoutStopSec=10
+KillMode=mixed
 
 # Check open files and restart if it reached the limit (ulimit -n buffer of 10000)
 # ExecStartPost=/bin/bash -c 'FILE_LIMIT=\$(ulimit -n); THRESHOLD=\$(( FILE_LIMIT - 10000 )); while :; do TOTAL_OPEN_FILES=\$(lsof -w 2>/dev/null | wc -l); if [ "\$TOTAL_OPEN_FILES" -ge "\$THRESHOLD" ]; then echo "File descriptor threshold reached: \$TOTAL_OPEN_FILES (threshold: \$THRESHOLD). Restarting service."; systemctl restart ragnar.service; exit 0; fi; sleep 10; done &'

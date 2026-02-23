@@ -148,6 +148,8 @@ WorkingDirectory=$ragnar_DIR
 ExecStart=/usr/bin/python3 ragnar.py
 Restart=always
 RestartSec=10
+TimeoutStopSec=10
+KillMode=mixed
 Environment=PYTHONPATH=$ragnar_DIR
 
 [Install]

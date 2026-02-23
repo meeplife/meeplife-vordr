@@ -928,10 +928,15 @@ class AdvancedVulnScanner:
         self._save_scan_to_db(scan_id, progress, options)
 
         # Start scan in thread pool
-        if self._executor is None:
+        if self._executor is None or self._executor._shutdown:
             self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
 
-        self._executor.submit(self._run_scan, scan_id, target, scan_type, options)
+        try:
+            self._executor.submit(self._run_scan, scan_id, target, scan_type, options)
+        except RuntimeError:
+            # Executor was shut down (interpreter exiting or cleanup) — create a fresh one
+            self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
+            self._executor.submit(self._run_scan, scan_id, target, scan_type, options)
 
         logger.info(f"Started {scan_type.value} scan {scan_id} against {target}")
         return scan_id

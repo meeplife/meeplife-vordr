@@ -99,6 +99,8 @@ The e-Paper HAT display and web interface make it easy to monitor and interact w
   - Hardware profile auto-detection for optimal performance
 - **E-Paper Display**: Real-time status display showing targets, vulnerabilities, credentials, and network info including IP address.
 - **WiFi Pineapple Pager Support**: Full-color LCD display with button controls, LED status indicators, graphical menus, and auto-dim for battery saving. Runs as a native Pager payload.
+- **Hardware-Bound Authentication**: Optional login system that encrypts the database at rest and binds access to the device hardware. Recovery codes provided for password reset. See [Security & Authentication](SECURITY.md) for details.
+- **PiSugar 3 Button Support**: Physical button swap between Ragnar and Pwnagotchi modes. Double tap or long press to switch. Single tap toggles manual mode. Works in both directions — no SSH or web UI needed.
 - **Comprehensive Logging**: All nmap commands and their results are automatically logged to `data/logs/nmap.log` for audit trails and troubleshooting.
 
 <p align="center">
@@ -186,13 +188,55 @@ Want to keep Ragnar online while occasionally hopping into Pwnagotchi mode? A bu
   cd /home/ragnar/Ragnar
   sudo ./scripts/install_pwnagotchi.sh
   ```
-  - The script installs Python dependencies, clones the upstream repo into `/opt/pwnagotchi`, writes `/etc/pwnagotchi/config.toml`, and drops a disabled `pwnagotchi.service`.
+  - The script clones [pwnagotchiworking](https://github.com/PierreGode/pwnagotchiworking) into `/opt/pwnagotchi`, installs dependencies, writes `/etc/pwnagotchi/config.toml`, and drops a disabled `pwnagotchi.service`.
+  - Re-running the installer is fast — it skips already-installed packages and pulls only new changes instead of re-cloning.
   - Progress is streamed to `/var/log/ragnar/pwnagotchi_install_<timestamp>.log` and mirrored in `data/pwnagotchi_status.json` for the UI.
 2. Open the Ragnar web UI → **Config** tab → **Pwnagotchi Bridge**.
-  - Use **Install or Repair** to re-run the script, **Switch to Pwnagotchi** to hand off the systemd services, and **Return to Ragnar** after rebooting.
-  - Status, phase, and service health also show up on the Discovered tab card once the installer has finished, so you can monitor swaps while reviewing loot.
+  - Click **Switch to Pwnagotchi** to hand off the systemd services. The button turns into a **Go to Pwnagotchi Portal** link (`http://<ip>:8080`) while the swap is in progress.
 
-When you schedule a switch to Pwnagotchi, the dashboard warns that Ragnar's web API will go offline until you reboot or trigger the return flow. Plan for SSH access before swapping.
+**Requirements for Pwnagotchi mode:**
+- A USB WiFi adapter (wlan1) that supports monitor mode — pwnagotchi needs this for WiFi handshake capture. Without it, the installer defaults to `wlan1` and pwnagotchi will wait until one is plugged in.
+- Waveshare 2.13" e-Paper HAT V4 for the pwnagotchi face display.
+
+**Pwnagotchi web UI:** After swapping, the Pwnagotchi dashboard is at `http://<same-ip>:8080` with default credentials `ragnar` / `ragnar`.
+
+**What the installer configures automatically:**
+- Monitor mode scripts (`/usr/bin/monstart`, `/usr/bin/monstop`)
+- e-Paper display type (`waveshare213_v4`) and rotation
+- Web UI enabled on port 8080
+- Pwngrid disabled (no-op shim to avoid log spam)
+- RSA keys, log directories, bettercap integration
+
+**Swapping via PiSugar 3 button:** If you have a PiSugar 3 battery attached, you can swap between Ragnar and Pwnagotchi with a physical button press — no web UI or SSH needed:
+
+| Button Action | While Ragnar is running | While Pwnagotchi is running |
+|---------------|------------------------|---------------------------|
+| Single tap | Toggle manual mode (pause/resume scanning) | — |
+| Double tap | Switch to Pwnagotchi | Switch to Ragnar |
+| Long press | Switch to Pwnagotchi | Switch to Ragnar |
+
+The PiSugar listener starts automatically on both sides. A 10-second cooldown prevents accidental double triggers. If PiSugar is not connected, the listener is silently disabled.
+
+**Static IP recommended:** When switching between Ragnar and Pwnagotchi, the WiFi connection may briefly drop and reconnect with a different DHCP IP. To keep the same IP across swaps, set a static IP on wlan0:
+
+```bash
+# Replace with your network name, desired IP, gateway, and DNS
+sudo nmcli con mod "YOUR_WIFI_SSID" ipv4.method manual \
+  ipv4.addresses "192.168.1.211/24" \
+  ipv4.gateway "192.168.1.1" \
+  ipv4.dns "192.168.1.1"
+sudo nmcli con up "YOUR_WIFI_SSID"
+```
+
+This only affects wlan0 (WiFi/web access). The monitor interface (wlan1/mon0) used by Pwnagotchi is not changed. Alternatively, set a DHCP reservation for the Pi's MAC address on your router.
+
+**Service recovery:** If Ragnar doesn't start after a reboot or pwnagotchi gets stuck, run:
+
+```bash
+sudo /home/ragnar/Ragnar/scripts/fix_services.sh
+```
+
+This stops pwnagotchi, ensures ragnar.service is enabled, and resets the dashboard status.
 
 ### 🍍 WiFi Pineapple Pager
 
@@ -259,6 +303,8 @@ Ragnar is designed to be a community-driven weapon forge. Create and share your 
 > Ragnar includes a built-in kill switch endpoint (`/api/kill`) that completely wipes all databases, logs, This ensures no sensitive data remains after demonstrations or training sessions.
 > If Ragnar is to be found without permission in a network anyone kan completely wipe all databases + delete the entire repository rendering Ragnar dead.
 > **📖 Full Documentation:** See [kill switch doc](KILL_SWITCH.md) for complete usage instructions and safety guidelines.
+>
+> **🔒 Authentication:** Ragnar supports optional hardware-bound login with full database encryption at rest. See [Security & Authentication](SECURITY.md).
 
 
 ⚠️ **For educational and authorized testing purposes only** ⚠️

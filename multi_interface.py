@@ -259,25 +259,55 @@ class MultiInterfaceState:
             self._refresh_focus_flags()
 
     def get_scan_jobs(self) -> List[ScanJob]:
-        """Return all scan jobs respecting interface limits and enable flags."""
+        """Return all scan jobs respecting interface limits and enable flags.
+
+        Ethernet interfaces are added first when preferred (they are faster and
+        more reliable than WiFi for local-network scanning).  WiFi interfaces
+        fill the remaining slots up to *max_interfaces*.
+        """
         max_interfaces = max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2)))
         if not self.is_multi_mode_enabled():
             logger.info("[MULTI-SCAN] get_scan_jobs: multi mode not enabled, returning empty")
             return []
 
+        prefer_ethernet = self.shared_data.config.get('ethernet_prefer_over_wifi', True)
+        ethernet_scan_enabled = self.shared_data.config.get('ethernet_scan_enabled', True)
+
         jobs: List[ScanJob] = []
+
         with self._lock:
-            logger.info(f"[MULTI-SCAN] get_scan_jobs: checking {len(self.interfaces)} interfaces (max={max_interfaces})")
+            # --- Ethernet interfaces first (if preferred) ---
+            if prefer_ethernet and ethernet_scan_enabled:
+                for entry in self.ethernet_interfaces.values():
+                    if len(jobs) >= max_interfaces:
+                        break
+                    if not entry.get('connected') or not entry.get('ip_address'):
+                        continue
+                    if entry.get('is_link_local'):
+                        continue
+                    logger.info(f"[MULTI-SCAN] Adding ethernet job: {entry.get('name')} -> {entry.get('ip_address')}")
+                    jobs.append(
+                        ScanJob(
+                            interface=entry['name'],
+                            ssid='LAN',
+                            role='ethernet',
+                            ip_address=entry.get('ip_address'),
+                            cidr=entry.get('cidr'),
+                            network_cidr=entry.get('network_cidr'),
+                            interface_type='ethernet',
+                        )
+                    )
+
+            # --- WiFi interfaces ---
+            logger.info(f"[MULTI-SCAN] get_scan_jobs: checking {len(self.interfaces)} wifi + {len(self.ethernet_interfaces)} ethernet (max={max_interfaces})")
             for entry in self.interfaces.values():
                 if len(jobs) >= max_interfaces:
                     break
                 if not entry.get('scan_enabled'):
-                    logger.warning(f"[MULTI-SCAN] {entry.get('name')} skipped - scan_enabled=False (reason={entry.get('reason')})")
                     continue
                 if not entry.get('connected') or not entry.get('connected_ssid'):
-                    logger.warning(f"[MULTI-SCAN] {entry.get('name')} skipped - connected={entry.get('connected')}, ssid={entry.get('connected_ssid')}")
                     continue
-                logger.info(f"[MULTI-SCAN] Adding scan job: {entry.get('name')} -> {entry.get('connected_ssid')}")
+                logger.info(f"[MULTI-SCAN] Adding wifi job: {entry.get('name')} -> {entry.get('connected_ssid')}")
                 jobs.append(
                     ScanJob(
                         interface=entry['name'],
@@ -286,20 +316,64 @@ class MultiInterfaceState:
                         ip_address=entry.get('ip_address'),
                         cidr=entry.get('cidr'),
                         network_cidr=entry.get('network_cidr'),
+                        interface_type='wifi',
                     )
                 )
+
+            # --- Ethernet at end if not preferred but enabled ---
+            if not prefer_ethernet and ethernet_scan_enabled:
+                for entry in self.ethernet_interfaces.values():
+                    if len(jobs) >= max_interfaces:
+                        break
+                    if not entry.get('connected') or not entry.get('ip_address'):
+                        continue
+                    if entry.get('is_link_local'):
+                        continue
+                    logger.info(f"[MULTI-SCAN] Adding ethernet job (non-preferred): {entry.get('name')}")
+                    jobs.append(
+                        ScanJob(
+                            interface=entry['name'],
+                            ssid='LAN',
+                            role='ethernet',
+                            ip_address=entry.get('ip_address'),
+                            cidr=entry.get('cidr'),
+                            network_cidr=entry.get('network_cidr'),
+                            interface_type='ethernet',
+                        )
+                    )
+
         return jobs
 
     def get_state_payload(self) -> Dict:
         with self._lock:
             focus_name = self.get_focus_interface()
             focus_entry = self.interfaces.get(focus_name) if focus_name else None
+
+            # Combine WiFi and Ethernet interfaces for the UI
+            all_interfaces = list(self.interfaces.values())
+            for eth in self.ethernet_interfaces.values():
+                if eth.get('connected') and eth.get('ip_address') and not eth.get('is_link_local'):
+                    all_interfaces.append({
+                        'name': eth['name'],
+                        'role': 'ethernet',
+                        'state': eth.get('state', 'UP'),
+                        'connected': True,
+                        'connected_ssid': 'LAN',
+                        'ip_address': eth.get('ip_address'),
+                        'cidr': eth.get('cidr'),
+                        'network_cidr': eth.get('network_cidr'),
+                        'mac_address': eth.get('mac_address'),
+                        'scan_enabled': self.shared_data.config.get('ethernet_scan_enabled', True),
+                        'interface_type': 'ethernet',
+                        'last_refresh': eth.get('last_refresh', self.ethernet_last_refresh),
+                    })
+
             payload = {
                 'global_enabled': self.is_multi_mode_enabled(),
                 'max_parallel': max(1, int(self.shared_data.config.get('wifi_multi_scan_max_parallel', 1))),
                 'max_interfaces': max(1, int(self.shared_data.config.get('wifi_multi_scan_max_interfaces', 2))),
                 'last_refresh': self.last_refresh,
-                'interfaces': list(self.interfaces.values()),
+                'interfaces': all_interfaces,
                 'scan_mode': self.get_scan_mode(),
                 'focus_interface': focus_name,
                 'focus_interface_connected': bool(focus_entry and focus_entry.get('connected')),

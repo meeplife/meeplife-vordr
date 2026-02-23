@@ -1148,6 +1148,11 @@ class WiFiManager:
                 state = (iface.get('state') or '').strip().upper()
                 if not name or state not in ('DOWN', 'DISCONNECTED', 'UNAVAILABLE', 'UNMANAGED'):
                     continue
+                # Skip secondary interfaces (e.g. wlan1) — they may be intentionally
+                # unmanaged for monitor mode and forcing them managed disrupts wlan0.
+                if name != self.default_wifi_interface:
+                    self.logger.debug(f"Skipping non-default Wi-Fi interface {name} (state: {state})")
+                    continue
                 self.logger.info(f"Bringing up Wi-Fi interface {name} (state: {state})")
 
                 link_result = subprocess.run(
@@ -1385,6 +1390,13 @@ class WiFiManager:
         except Exception as exc:
             self.ap_logger.warning(f"Secondary adapter scan failed on {secondary}: {exc}")
             return []
+        finally:
+            # Restore wlan1 to unmanaged so NM doesn't add a competing default route
+            # that steals traffic from wlan0.
+            subprocess.run(
+                ['sudo', 'nmcli', 'dev', 'set', secondary, 'managed', 'no'],
+                capture_output=True, text=True, timeout=5
+            )
 
     def scan_networks_while_ap(self, interface=None):
         """Scan for networks while in AP mode using smart caching and fallback strategies"""

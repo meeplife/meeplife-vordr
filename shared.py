@@ -76,7 +76,11 @@ class SharedData:
         self.screen_reversed = bool(self.config.get('screen_reversed', False))
         self.web_screen_reversed = self.screen_reversed
 
+        # Check if auth is configured and DB might be encrypted
+        self.auth_configured = self._check_auth_configured()
+
         # Initialize SQLite database manager
+        # If auth is configured and DB is encrypted, db may be None until login
         self.db = get_db(currentdir=self.currentdir)
         self._configure_database()
         
@@ -265,6 +269,22 @@ class SharedData:
         db.configure_storage(self.current_network_dir, self.current_network_db_path)
         self.db = db
 
+    def _check_auth_configured(self):
+        """Check if authentication is configured by looking for the auth database."""
+        import sqlite3
+        auth_db_path = os.path.join(self.datadir, 'ragnar_auth.db')
+        if not os.path.exists(auth_db_path):
+            return False
+        try:
+            conn = sqlite3.connect(auth_db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM auth")
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count > 0
+        except Exception:
+            return False
+
     def _refresh_network_components(self):
         """Ensure dependent subsystems follow the current network context."""
         self._configure_database()
@@ -332,6 +352,7 @@ class SharedData:
             "__title_Ragnar__": "Settings",
             "manual_mode": False,
             "websrv": True,
+            "web_bind_interface": "",
             "web_increment": False,
             "debug_mode": False,
             "scan_vuln_running": True,
@@ -1008,6 +1029,7 @@ class SharedData:
             self.font_arial9 = self.load_font('Arial.ttf', 9)
             self.font_arialbold = self.load_font('Arial.ttf', 12)
             self.font_viking = self.load_font('Viking.TTF', 13)
+            self.font_viking_sm = self.load_font('Viking.TTF', 10)
 
         except Exception as e:
             logger.error(f"Error loading fonts: {e}")

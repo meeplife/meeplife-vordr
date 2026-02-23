@@ -1,7 +1,6 @@
 #!/bin/bash
-# Pierre Gode (Updated Installer - Debian 12/13 Compatible + Key Fix + pwngrid Disable)
+# Pierre Gode (Updated Installer - Fast Reinstalls, Debian 12/13 Compatible)
 set -euo pipefail
-
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 STATUS_FILE="$REPO_ROOT/data/pwnagotchi_status.json"
 LOG_DIR="/var/log/ragnar"
@@ -42,52 +41,23 @@ EOF
 }
 
 select_station_interface() {
-    local attempt=0
-    local max_attempts=5
-    local is_interactive=false
-
-    # Check if we're running in an interactive terminal
-    if [[ -t 0 ]]; then
-        is_interactive=true
-    fi
-
-    while true; do
-        attempt=$((attempt + 1))
-        mapfile -t wlan_ifaces < <(ls /sys/class/net 2>/dev/null | grep -E '^wlan[0-9]+' | sort || true)
-        for iface in "${wlan_ifaces[@]}"; do
-            if [[ "$iface" != "wlan0" ]]; then
-                echo "$iface"
-                return 0
-            fi
-        done
-        echo "[WARN] No secondary wlan interface detected (attempt ${attempt}/${max_attempts})." >&2
-        echo "[WARN] Connect a USB WiFi adapter (wlan1/wlan2...) for monitor mode." >&2
-
-        # Non-interactive mode (GUI install): retry a few times then fail gracefully
-        if [[ "$is_interactive" != true ]]; then
-            if [[ $attempt -ge $max_attempts ]]; then
-                echo "[ERROR] No secondary WiFi adapter found after ${max_attempts} attempts." >&2
-                echo "[ERROR] Please connect a USB WiFi adapter and try again." >&2
-                return 1
-            fi
-            echo "[INFO] Waiting 3 seconds before retry (attempt ${attempt}/${max_attempts})..." >&2
-            sleep 3
-            continue
+    # Quick scan for a secondary wlan interface (not wlan0). Never blocks.
+    mapfile -t wlan_ifaces < <(ls /sys/class/net 2>/dev/null | grep -E '^wlan[0-9]+' | sort || true)
+    for iface in "${wlan_ifaces[@]}"; do
+        if [[ "$iface" != "wlan0" ]]; then
+            echo "$iface"
+            return 0
         fi
-
-        # Interactive mode (terminal install): prompt user
-        read -rp "Press Enter to rescan or type 'abort' to cancel installation: " response || true
-        if [[ "${response,,}" == "abort" ]]; then
-            return 1
-        fi
-        sleep 2
     done
+    # No adapter found - default to wlan1, pwnagotchi will use it when plugged in
+    echo "[WARN] No secondary WiFi adapter detected. Defaulting to wlan1." >&2
+    echo "wlan1"
+    return 0
 }
 
 set_or_update_config_value() {
     local dotted_key="$1"
     local value="$2"
-    # Use Python + tomlkit to safely update TOML table-style configs
     python3 -c "
 import tomlkit, sys
 key_path = '${dotted_key}'.split('.')
@@ -99,11 +69,17 @@ for k in key_path[:-1]:
     if k not in d:
         d[k] = tomlkit.table()
     d = d[k]
+# Convert types for proper TOML output
+if val == 'true':
+    val = True
+elif val == 'false':
+    val = False
+elif val.isdigit():
+    val = int(val)
 d[key_path[-1]] = val
 with open('${CONFIG_FILE}', 'w') as f:
     f.write(tomlkit.dumps(doc))
 " 2>/dev/null || {
-        # Fallback: append as flat dotted key if tomlkit unavailable
         echo "$dotted_key = \"$value\"" >> "$CONFIG_FILE"
     }
 }
@@ -162,6 +138,16 @@ EOF
     chown root:root /usr/bin/monstart /usr/bin/monstop
 }
 
+# Helper: check if all packages in a list are already installed
+all_packages_installed() {
+    for pkg in "$@"; do
+        if ! dpkg -l "$pkg" 2>/dev/null | grep -q '^ii'; then
+            return 1
+        fi
+    done
+    return 0
+}
+
 trap 'write_status "error" "Installation failed (line ${LINENO}). Check ${LOG_FILE}." "error"' ERR
 
 # -------------------------------------------------------------------
@@ -172,7 +158,6 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# Block installation when Ragnar is running without an e-paper display
 HEADLESS_DETECTED=false
 if pgrep -f "headlessRagnar.py" >/dev/null 2>&1; then
     HEADLESS_DETECTED=true
@@ -202,99 +187,145 @@ if [[ $available_space -lt $MIN_SPACE_MB ]]; then
     exit 1
 fi
 
-write_status "installing" "Updating package lists" "apt_update"
-echo "[INFO] Updating apt repositories"
-apt-get update -y
-
 # -------------------------------------------------------------------
-# SYSTEM PACKAGES
+# SYSTEM PACKAGES (skip if all already installed)
 # -------------------------------------------------------------------
 packages=(
-    git
-    python3
-    python3-pip
-    python3-setuptools
-    python3-dev
-    python3-venv
-    libpcap-dev
-    libffi-dev
-    libssl-dev
-    libcap2-bin
-    python3-smbus
-    i2c-tools
-    libglib2.0-dev
-    pkg-config
-    meson
+    git python3 python3-pip python3-setuptools python3-dev python3-venv
+    libpcap-dev libffi-dev libssl-dev libcap2-bin
+    python3-smbus i2c-tools libglib2.0-dev pkg-config meson
 )
 
 optional_packages=(
-    bettercap
-    hcxdumptool
-    hcxtools
-    libopenblas-dev
-    liblapack-dev
+    bettercap hcxdumptool hcxtools libopenblas-dev liblapack-dev
 )
 
-write_status "installing" "Installing required system packages" "apt_required"
-echo "[INFO] Installing required packages..."
-apt-get install -y "${packages[@]}"
-
-write_status "installing" "Installing optional wireless tools" "apt_optional"
-echo "[INFO] Installing optional wireless tools in one batch..."
-if ! apt-get install -y "${optional_packages[@]}"; then
-    echo "[WARN] Optional wireless bundle had installation issues. Continuing with required packages only."
+if all_packages_installed "${packages[@]}"; then
+    echo "[INFO] All required packages already installed - skipping apt"
+else
+    write_status "installing" "Installing required system packages" "apt_required"
+    echo "[INFO] Updating apt and installing required packages..."
+    apt-get update -qq
+    apt-get install -y --no-upgrade "${packages[@]}"
 fi
 
-write_status "installing" "System packages installed" "dependencies"
+if all_packages_installed "${optional_packages[@]}"; then
+    echo "[INFO] All optional packages already installed - skipping"
+else
+    write_status "installing" "Installing optional wireless tools" "apt_optional"
+    echo "[INFO] Installing optional wireless tools..."
+    apt-get install -y --no-upgrade "${optional_packages[@]}" || \
+        echo "[WARN] Some optional packages failed. Continuing."
+fi
+
+write_status "installing" "System packages ready" "dependencies"
 
 # -------------------------------------------------------------------
-# CLONE REPOSITORY
+# CLONE OR UPDATE REPOSITORY
 # -------------------------------------------------------------------
-write_status "installing" "Cloning Pwnagotchi repository" "clone"
-echo "[INFO] Cloning Pwnagotchi repository to ${PWN_DIR}"
-rm -rf "$PWN_DIR"
-# Use shallow clone for faster download
-git clone --depth 1 "$PWN_REPO" "$PWN_DIR"
+write_status "installing" "Getting Pwnagotchi source" "clone"
+if [[ -d "$PWN_DIR/.git" ]]; then
+    echo "[INFO] Pwnagotchi repo exists - pulling latest changes..."
+    cd "$PWN_DIR"
+    git fetch --depth 1 origin
+    git reset --hard origin/HEAD
+    echo "[INFO] Repository updated"
+else
+    echo "[INFO] Cloning Pwnagotchi repository to ${PWN_DIR}..."
+    rm -rf "$PWN_DIR"
+    git clone --depth 1 "$PWN_REPO" "$PWN_DIR"
+fi
 
-write_status "installing" "Installing Pwnagotchi from source" "python"
 cd "$PWN_DIR"
 
 # -------------------------------------------------------------------
-# PIP + INSTALL
+# PIP INSTALL (skip pip upgrade - system-managed)
 # -------------------------------------------------------------------
-write_status "installing" "Upgrading pip" "pip"
-echo "[INFO] Upgrading pip..."
-python3 -m pip install --upgrade --break-system-packages pip || echo "[WARN] pip upgrade skipped"
-
 write_status "installing" "Installing Pwnagotchi package and dependencies" "python_install"
-echo "[INFO] Installing Pwnagotchi package (editable mode via pyproject.toml)..."
-# pwnagotchiworking uses pyproject.toml — pip install -e . handles all deps
+
+# Check if pwnagotchi is already importable (fast path for reinstalls)
+if python3 -c "import pwnagotchi" 2>/dev/null; then
+    echo "[INFO] Pwnagotchi package already installed - reinstalling to pick up changes..."
+fi
+
+echo "[INFO] Installing Pwnagotchi package (editable mode)..."
 python3 -m pip install \
     --break-system-packages \
     --use-pep517 \
-    -e .
+    --no-deps \
+    -e . 2>&1 || true
+
+# Install dependencies separately with fallback to PyPI if piwheels fails
+echo "[INFO] Installing Python dependencies..."
+python3 -m pip install \
+    --break-system-packages \
+    --index-url https://pypi.org/simple \
+    --extra-index-url https://www.piwheels.org/simple \
+    PyYAML dbus-python file-read-backwards flask flask-cors flask-wtf \
+    gast gpiozero inky numpy pycryptodome python-dateutil requests \
+    rpi-lgpio rpi_hardware_pwm scapy setuptools shimmy smbus2 spidev \
+    tomlkit toml tweepy websockets pisugar 2>&1 || true
+
+# pydrive2 is a hard dependency (pwnagotchi crashes without it).
+# Force PyPI only - piwheels drops connections on large packages like google-api-python-client.
+# PIP_CONFIG_FILE=/dev/null ignores /etc/pip.conf which adds piwheels.
+echo "[INFO] Installing pydrive2 from PyPI (required - may take a few minutes)..."
+PIP_CONFIG_FILE=/dev/null python3 -m pip install \
+    --break-system-packages \
+    --index-url https://pypi.org/simple \
+    --timeout 300 \
+    --retries 5 \
+    pydrive2 2>&1 || {
+    echo "[WARN] pydrive2 first attempt failed. Retrying with no cache..."
+    PIP_CONFIG_FILE=/dev/null python3 -m pip install \
+        --break-system-packages \
+        --index-url https://pypi.org/simple \
+        --timeout 600 \
+        --retries 5 \
+        --no-cache-dir \
+        pydrive2 2>&1 || echo "[ERROR] pydrive2 install failed. Run manually: sudo PIP_CONFIG_FILE=/dev/null pip3 install --break-system-packages --index-url https://pypi.org/simple pydrive2"
+}
+
+# -------------------------------------------------------------------
+# PILLOW COMPATIBILITY SHIM (getsize() removed in Pillow 10+)
+# -------------------------------------------------------------------
+echo "[INFO] Installing Pillow compatibility shim..."
+SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "/usr/local/lib/python3.13/dist-packages")
+cat > "$SITE_PACKAGES/pillow_compat.py" << 'PYEOF'
+"""Restore PIL.ImageFont.getsize() removed in Pillow 10+."""
+from PIL import ImageFont
+if not hasattr(ImageFont.FreeTypeFont, 'getsize'):
+    def _getsize(self, text, *args, **kwargs):
+        bbox = self.getbbox(text, *args, **kwargs)
+        if bbox is None:
+            return (0, 0)
+        return (bbox[2] - bbox[0], bbox[3] - bbox[1])
+    ImageFont.FreeTypeFont.getsize = _getsize
+if not hasattr(ImageFont.FreeTypeFont, 'getmetrics'):
+    def _getmetrics(self):
+        bbox = self.getbbox('Ay')
+        return bbox[3] if bbox else 0, 0
+    ImageFont.FreeTypeFont.getmetrics = _getmetrics
+PYEOF
+
+# Inject the shim into pwnagotchi's entry point if not already present
+if ! grep -q 'pillow_compat' "$PWN_DIR/pwnagotchi/cli.py" 2>/dev/null; then
+    sed -i '1s|^|import pillow_compat\n|' "$PWN_DIR/pwnagotchi/cli.py"
+    echo "[INFO] Pillow compatibility shim injected into pwnagotchi"
+else
+    echo "[INFO] Pillow shim already present - skipping"
+fi
 
 # -------------------------------------------------------------------
 # VALIDATE + FIX /etc/pwnagotchi
 # -------------------------------------------------------------------
-write_status "installing" "Configuring Pwnagotchi directories" "config_dirs"
-echo "[INFO] Validating /etc/pwnagotchi directory..."
-
+write_status "installing" "Configuring Pwnagotchi" "config_dirs"
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
 chown root:root "$CONFIG_DIR"
 
 write_status "installing" "Detecting WiFi interfaces" "interface_detect"
-STATION_IFACE="${PWN_DATA_IFACE:-}"
-if [[ -z "$STATION_IFACE" ]]; then
-    if ! STATION_IFACE=$(select_station_interface); then
-        STATION_IFACE="wlan1"
-        echo "[WARN] No USB WiFi adapter detected. Defaulting to '${STATION_IFACE}'." >&2
-        echo "[WARN] Pwnagotchi will not work until a USB WiFi adapter is connected." >&2
-        echo "[WARN] Continuing installation so everything is ready when the adapter is plugged in." >&2
-        write_status "installing" "No WiFi adapter found - defaulting to wlan1. Connect adapter before starting." "interface_warn"
-    fi
-fi
+STATION_IFACE="${PWN_DATA_IFACE:-$(select_station_interface)}"
 MONITOR_IFACE_NAME="${PWN_MON_IFACE:-mon0}"
 echo "[INFO] Using managed iface: ${STATION_IFACE} (monitor alias: ${MONITOR_IFACE_NAME})"
 
@@ -302,27 +333,26 @@ write_status "installing" "Installing monitor mode scripts" "monitor_scripts"
 install_monitor_scripts "$STATION_IFACE" "$MONITOR_IFACE_NAME"
 
 # -------------------------------------------------------------------
-# RSA KEY VALIDATION + AUTO-GENERATION
+# RSA KEY
 # -------------------------------------------------------------------
 write_status "installing" "Setting up RSA keys" "rsa_keys"
 if [[ ! -f "$CONFIG_DIR/id_rsa" ]]; then
-    echo "[INFO] Generating new RSA keypair for Pwnagotchi..."
+    echo "[INFO] Generating RSA keypair..."
     ssh-keygen -t rsa -b 2048 -f "$CONFIG_DIR/id_rsa" -N ""
 else
-    echo "[INFO] RSA private key already exists — skipping generation."
+    echo "[INFO] RSA key already exists - skipping"
 fi
-
 chmod 600 "$CONFIG_DIR/id_rsa"
 chmod 644 "$CONFIG_DIR/id_rsa.pub"
 
 # -------------------------------------------------------------------
-# CONFIG FILE SETUP
+# CONFIG FILE
 # -------------------------------------------------------------------
+echo "[INFO] Configuring Pwnagotchi config file..."
 write_status "installing" "Creating configuration files" "config_files"
 if [[ ! -f "$CONFIG_FILE" ]]; then
     cat >"$CONFIG_FILE" <<EOF
-# Ragnar-managed Pwnagotchi user config (pwnagotchiworking / noai branch)
-# Overrides values from default.toml
+# Ragnar-managed Pwnagotchi config (pwnagotchiworking)
 
 [main]
 name = "RagnarPwn"
@@ -334,53 +364,81 @@ mon_start_cmd = "/usr/bin/monstart"
 mon_stop_cmd = "/usr/bin/monstop"
 
 [ui.display]
-enabled = false
+enabled = true
+type = "waveshare_4"
+rotation = 180
+color = "black"
 
 [ui.web]
 enabled = true
+address = "0.0.0.0"
 username = "ragnar"
 password = "ragnar"
+port = 8080
 
 [ui.font]
 name = "DejaVuSansMono"
 
 [main.plugins.grid]
 enabled = false
+
+[main.plugins.fix_services]
+enabled = false
+
+[personality]
+advertise = false
 EOF
     echo "[INFO] Created default config at ${CONFIG_FILE}"
 else
+    echo "[INFO] Config exists - updating values..."
     set_or_update_config_value "main.iface" "${STATION_IFACE}"
     set_or_update_config_value "main.mon_iface" "${MONITOR_IFACE_NAME}"
     set_or_update_config_value "main.mon_start_cmd" "/usr/bin/monstart"
     set_or_update_config_value "main.mon_stop_cmd" "/usr/bin/monstop"
+    # Ensure Ragnar-managed settings are correct
+    set_or_update_config_value "ui.web.enabled" "true"
+    set_or_update_config_value "ui.web.address" "0.0.0.0"
+    set_or_update_config_value "ui.web.username" "ragnar"
+    set_or_update_config_value "ui.web.password" "ragnar"
+    set_or_update_config_value "ui.web.port" "8080"
+    set_or_update_config_value "ui.display.enabled" "true"
+    set_or_update_config_value "ui.display.type" "waveshare_4"
+    set_or_update_config_value "ui.display.rotation" "180"
+    set_or_update_config_value "ui.display.color" "black"
+    set_or_update_config_value "main.plugins.grid.enabled" "false"
+    # Disable mesh advertising — pwngrid-peer is not used in this setup.
+    # Without this, pwnagotchi crashes on start trying to reach port 8666.
+    set_or_update_config_value "personality.advertise" "false"
+    # Disable fix_services — it is hardcoded to wlan0mon but we use mon0/wlan1.
+    # The brcmfmac recovery logic does not apply to our mt76x2u setup.
+    set_or_update_config_value "main.plugins.fix_services.enabled" "false"
+    echo "[INFO] Config updated"
 fi
 
-mkdir -p "$CONFIG_DIR/conf.d" "$CONFIG_DIR/custom_plugins"
+mkdir -p "$CONFIG_DIR/conf.d" "$CONFIG_DIR/custom_plugins" "$CONFIG_DIR/log"
 
 # -------------------------------------------------------------------
-# DISABLE PWNGIRD EXECUTION (REMOVE LOG SPAM)
+# PWNGRID SHIM
 # -------------------------------------------------------------------
-echo "[INFO] Installing pwngrid no-op shim..."
-
+echo "[INFO] Checking pwngrid shim..."
 if [[ ! -f "/usr/local/bin/pwngrid" ]]; then
+    echo "[INFO] Installing pwngrid no-op shim..."
     cat >/usr/local/bin/pwngrid <<'EOF'
 #!/bin/bash
-# Dummy pwngrid replacement to avoid log spam
 exit 0
 EOF
     chmod +x /usr/local/bin/pwngrid
-    echo "[INFO] pwngrid shim installed."
 else
-    echo "[INFO] pwngrid shim already exists — skipping."
+    echo "[INFO] pwngrid shim already exists - skipping"
 fi
 
 # -------------------------------------------------------------------
-# ENSURE LAUNCHER WRAPPER EXISTS
+# LAUNCHER WRAPPER
 # -------------------------------------------------------------------
-echo "[INFO] Ensuring /usr/bin/pwnagotchi-launcher wrapper exists..."
+echo "[INFO] Setting up pwnagotchi-launcher wrapper..."
 launcher_candidates=(
-    "$(command -v pwnagotchi 2>/dev/null)"
-    "$(command -v pwnagotchi-launcher 2>/dev/null)"
+    "$(command -v pwnagotchi 2>/dev/null || true)"
+    "$(command -v pwnagotchi-launcher 2>/dev/null || true)"
     "/usr/local/bin/pwnagotchi"
     "/usr/local/bin/pwnagotchi-launcher"
 )
@@ -400,15 +458,17 @@ exec ${launcher_target} "\$@"
 EOF
     chmod 755 /usr/bin/pwnagotchi-launcher
     chown root:root /usr/bin/pwnagotchi-launcher
-    echo "[INFO] Launcher wrapper points to ${launcher_target}"
+    echo "[INFO] Launcher wrapper -> ${launcher_target}"
 else
-    echo "[WARN] Could not determine pwnagotchi binary path; launcher wrapper not updated."
+    echo "[WARN] Could not determine pwnagotchi binary path"
 fi
 
 # -------------------------------------------------------------------
-# SYSTEMD SERVICE SETUP
+# SYSTEMD SERVICES (all with timeouts to prevent hanging)
 # -------------------------------------------------------------------
-write_status "installing" "Setting up systemd service" "systemd"
+echo "[INFO] Setting up systemd services..."
+write_status "installing" "Setting up systemd services" "systemd"
+
 cat >"$SERVICE_FILE" <<EOF
 [Unit]
 Description=Pwnagotchi Mode Service
@@ -420,20 +480,65 @@ ExecStart=/usr/local/bin/pwnagotchi
 WorkingDirectory=${PWN_DIR}
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 644 "$SERVICE_FILE"
+
+echo "[INFO] Reloading systemd daemon..."
+timeout 15 systemctl daemon-reload || echo "[WARN] daemon-reload slow"
+
+echo "[INFO] Disabling pwnagotchi service (will be started on demand)..."
+timeout 10 systemctl disable pwnagotchi >/dev/null 2>&1 || true
+
+echo "[INFO] Stopping pwnagotchi if running..."
+timeout 15 systemctl stop pwnagotchi >/dev/null 2>&1 || {
+    echo "[WARN] pwnagotchi stop timed out - force killing..."
+    timeout 5 systemctl kill pwnagotchi >/dev/null 2>&1 || true
+}
+
+# -------------------------------------------------------------------
+# PISUGAR SWAP BUTTON SERVICE
+# -------------------------------------------------------------------
+echo "[INFO] Setting up PiSugar swap button service..."
+SWAP_BUTTON_SCRIPT="$REPO_ROOT/scripts/ragnar_swap_button.py"
+SWAP_BUTTON_SERVICE="/etc/systemd/system/ragnar-swap-button.service"
+
+if [[ -f "$SWAP_BUTTON_SCRIPT" ]]; then
+    chmod 755 "$SWAP_BUTTON_SCRIPT"
+    cp "$SWAP_BUTTON_SCRIPT" /usr/local/bin/ragnar-swap-button
+
+    cat >"$SWAP_BUTTON_SERVICE" <<EOF
+[Unit]
+Description=PiSugar Button Listener (Ragnar/Pwnagotchi Swap)
+After=pisugar-server.service
+Wants=pisugar-server.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/ragnar-swap-button
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-chmod 644 "$SERVICE_FILE"
-systemctl daemon-reload
-systemctl disable pwnagotchi >/dev/null 2>&1 || true
-systemctl stop pwnagotchi >/dev/null 2>&1 || true
+    chmod 644 "$SWAP_BUTTON_SERVICE"
+    timeout 10 systemctl daemon-reload || true
+    timeout 10 systemctl enable ragnar-swap-button >/dev/null 2>&1 || true
+    echo "[INFO] PiSugar swap button service installed"
+else
+    echo "[INFO] ragnar_swap_button.py not found - skipping PiSugar button setup"
+fi
 
 # -------------------------------------------------------------------
 # BOOT-TIME MIGRATION SERVICE
 # -------------------------------------------------------------------
-write_status "installing" "Setting up migration service" "migration_service"
+echo "[INFO] Setting up migration service..."
 MIGRATE_SCRIPT="$REPO_ROOT/scripts/migrate_pwnagotchi.sh"
 MIGRATE_SERVICE="/etc/systemd/system/ragnar-pwn-migrate.service"
 
@@ -443,13 +548,14 @@ if [[ -f "$MIGRATE_SCRIPT" ]]; then
     cat >"$MIGRATE_SERVICE" <<EOF
 [Unit]
 Description=Ragnar Pwnagotchi Migration Check
-After=local-fs.target network-online.target
-Before=pwnagotchi.service ragnar.service
+After=local-fs.target
+Before=pwnagotchi.service
 ConditionPathExists=/opt/pwnagotchi
 
 [Service]
 Type=oneshot
 ExecStart=${MIGRATE_SCRIPT}
+TimeoutStartSec=120
 RemainAfterExit=yes
 
 [Install]
@@ -457,41 +563,46 @@ WantedBy=multi-user.target
 EOF
 
     chmod 644 "$MIGRATE_SERVICE"
-    systemctl daemon-reload
-    systemctl enable ragnar-pwn-migrate >/dev/null 2>&1 || true
-    echo "[INFO] Boot-time migration service installed and enabled."
+    timeout 10 systemctl daemon-reload || true
+    timeout 10 systemctl enable ragnar-pwn-migrate >/dev/null 2>&1 || true
+    echo "[INFO] Migration service installed"
 
-    # Write marker since we just did a fresh install of the correct version
     mkdir -p /var/lib/ragnar
     date -Iseconds > /var/lib/ragnar/.pwn_migrated
 else
-    echo "[WARN] migrate_pwnagotchi.sh not found; skipping migration service setup."
+    echo "[WARN] migrate_pwnagotchi.sh not found - skipping"
 fi
 
 # -------------------------------------------------------------------
 # BETTERCAP SERVICE SYNC
 # -------------------------------------------------------------------
+echo "[INFO] Checking bettercap..."
 if [[ -f "/usr/bin/bettercap-launcher" ]]; then
-    echo "[INFO] Ensuring bettercap launcher permissions..."
     chmod 755 /usr/bin/bettercap-launcher
-else
-    echo "[WARN] /usr/bin/bettercap-launcher not found; skipping chmod."
 fi
-
-if systemctl list-unit-files | grep -q '^bettercap\.service'; then
-    echo "[INFO] Reloading systemd units and restarting bettercap..."
-    systemctl daemon-reload
-    systemctl restart bettercap
-else
-    echo "[WARN] bettercap.service not detected; skipping restart."
-fi
+echo "[INFO] bettercap will start on swap to Pwnagotchi"
 
 # -------------------------------------------------------------------
 # CLEANUP
 # -------------------------------------------------------------------
-write_status "installing" "Cleaning up temporary files" "cleanup"
-echo "[INFO] Cleaning up temporary files..."
+echo "[INFO] Cleaning up temp files..."
+write_status "installing" "Cleaning up" "cleanup"
 rm -rf "$TEMP_DIR"
 
+# Ensure Ragnar is still the master - clean up any leftover pwnagotchi state
+echo "[INFO] Ensuring Ragnar is running..."
+ip link set mon0 down 2>/dev/null || true
+iw mon0 del 2>/dev/null || true
+timeout 10 systemctl stop pwnagotchi 2>/dev/null || true
+timeout 10 systemctl stop bettercap 2>/dev/null || true
+if ! systemctl is-active ragnar >/dev/null 2>&1; then
+    echo "[INFO] Ragnar was stopped - restarting..."
+    systemctl start ragnar
+fi
+
 write_status "installed" "Pwnagotchi installed successfully. Use Ragnar dashboard to launch." "complete"
-echo "[INFO] Installation complete. Service disabled until manually started."
+echo "[INFO] =========================================="
+echo "[INFO] Installation complete!"
+echo "[INFO] Ragnar: $(systemctl is-active ragnar 2>/dev/null)"
+echo "[INFO] Pwnagotchi: $(systemctl is-active pwnagotchi 2>/dev/null) (disabled)"
+echo "[INFO] =========================================="

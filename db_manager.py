@@ -429,14 +429,23 @@ class DatabaseManager:
             conn.commit()
             logger.info("Database schema initialized successfully (includes WiFi, Scan, and ZAP Credentials tables)")
         
-        # Perform CSV migration if needed
-        self._migrate_from_csv()
-        
-        # Clean up any duplicate entries
-        self.cleanup_duplicate_hosts()
+        # Perform CSV migration if needed (non-fatal if it fails)
+        try:
+            self._migrate_from_csv()
+        except Exception as e:
+            logger.warning(f"CSV migration skipped: {e}")
 
-        # Ensure legacy hostnames are cleaned up once on startup
-        self.sanitize_all_hostnames()
+        # Clean up any duplicate entries (non-fatal if it fails)
+        try:
+            self.cleanup_duplicate_hosts()
+        except Exception as e:
+            logger.warning(f"Duplicate cleanup skipped: {e}")
+
+        # Ensure legacy hostnames are cleaned up once on startup (non-fatal)
+        try:
+            self.sanitize_all_hostnames()
+        except Exception as e:
+            logger.warning(f"Hostname sanitization skipped: {e}")
     
     def _migrate_from_csv(self):
         """
@@ -446,13 +455,19 @@ class DatabaseManager:
         if not os.path.exists(self.netkb_csv):
             logger.debug("No netkb.csv found - skipping migration")
             return
-        
+
         # Check if database already has data
         with self.get_connection() as conn:
             cursor = conn.cursor()
+            # Verify hosts table exists before querying
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hosts'")
+            if not cursor.fetchone():
+                logger.warning("hosts table not found - skipping CSV migration")
+                return
+
             cursor.execute("SELECT COUNT(*) FROM hosts")
             count = cursor.fetchone()[0]
-            
+
             if count > 0:
                 logger.debug(f"Database already contains {count} hosts - skipping CSV migration")
                 return
@@ -2635,20 +2650,35 @@ def get_db(currentdir: str = None) -> DatabaseManager:
     """
     Get singleton DatabaseManager instance.
     Thread-safe lazy initialization.
-    
+
     Args:
         currentdir: Root directory of Ragnar installation
-    
+
     Returns:
         DatabaseManager instance
     """
     global _db_instance
-    
+
     if _db_instance is None:
         with _db_lock:
             if _db_instance is None:
                 _db_instance = DatabaseManager(currentdir=currentdir)
-    
+
+    return _db_instance
+
+
+def close_db():
+    """Close the singleton database instance. Used before encrypting the DB file."""
+    global _db_instance
+    with _db_lock:
+        _db_instance = None
+
+
+def reinit_db(currentdir: str = None) -> DatabaseManager:
+    """Reinitialize the singleton database instance. Used after decrypting the DB file."""
+    global _db_instance
+    with _db_lock:
+        _db_instance = DatabaseManager(currentdir=currentdir)
     return _db_instance
 
 

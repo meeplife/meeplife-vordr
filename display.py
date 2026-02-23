@@ -696,7 +696,18 @@ class Display:
                 image = Image.new('1', (self.shared_data.width, self.shared_data.height))
                 draw = ImageDraw.Draw(image)
                 draw.rectangle((0, 0, self.shared_data.width, self.shared_data.height), fill=255)
-                draw.text((int(37 * self.scale_factor_x), int(5 * self.scale_factor_y)), "RAGNAR", font=self.shared_data.font_viking, fill=0)
+                # Check PiSugar once per frame for title sizing + battery text
+                _pisugar_available = False
+                try:
+                    _ri = getattr(self.shared_data, 'ragnar_instance', None)
+                    _ps = getattr(_ri, 'pisugar_listener', None) if _ri else None
+                    _pisugar_available = _ps and _ps.available
+                except Exception:
+                    pass
+                if _pisugar_available:
+                    draw.text((int(40 * self.scale_factor_x), int(6 * self.scale_factor_y)), "RAGNAR", font=self.shared_data.font_viking_sm, fill=0)
+                else:
+                    draw.text((int(37 * self.scale_factor_x), int(5 * self.scale_factor_y)), "RAGNAR", font=self.shared_data.font_viking, fill=0)
                 draw.text((int(110 * self.scale_factor_x), int(170 * self.scale_factor_y)), self.manual_mode_txt, font=self.shared_data.font_arial14, fill=0)
                 
                 # Show AP status or WiFi status in the top-left corner
@@ -714,6 +725,22 @@ class Display:
                     image.paste(self.shared_data.connected, (int(104 * self.scale_factor_x), int(3 * self.scale_factor_y)))
                 if self.shared_data.usb_active:
                     image.paste(self.shared_data.usb, (int(90 * self.scale_factor_x), int(4 * self.scale_factor_y)))
+
+                # Battery percentage (PiSugar) - flush right in header
+                if _pisugar_available:
+                    try:
+                        bat_level = _ps.get_battery_level()
+                        if bat_level is not None:
+                            bat_level = int(round(bat_level))
+                            charging = _ps.is_charging()
+                            bat_text = f"{bat_level}%+" if charging else f"{bat_level}%"
+                            bbox = self.shared_data.font_arial9.getbbox(bat_text)
+                            text_w = bbox[2] - bbox[0]
+                            tx = self.shared_data.width - text_w - 1
+                            draw.text((tx, int(10 * self.scale_factor_y)),
+                                      bat_text, font=self.shared_data.font_arial9, fill=0)
+                    except Exception:
+                        pass
 
                 stats = [
                     (self.shared_data.target, (int(8 * self.scale_factor_x), int(22 * self.scale_factor_y)), (int(28 * self.scale_factor_x), int(22 * self.scale_factor_y)), str(self.shared_data.targetnbr)),
