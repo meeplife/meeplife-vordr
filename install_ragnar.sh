@@ -26,7 +26,7 @@ VERBOSE=false
 ragnar_USER="ragnar"
 ragnar_PATH="/home/${ragnar_USER}/Ragnar"
 CURRENT_STEP=0
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 HEADLESS_MODE=false
 HEADLESS_VARIANT=""
 HEADLESS_VARIANT_LABEL=""
@@ -533,6 +533,58 @@ EOF
 }
 
 # Configure SPI and I2C
+# Install PiSugar power manager server (required for PiSugar UPS battery/button support)
+install_pisugar_server() {
+    # Only relevant on ARM / Raspberry Pi hardware
+    if [ "$IS_ARM" != true ]; then
+        log "INFO" "Skipping PiSugar server install (not ARM hardware)"
+        return 0
+    fi
+
+    # Check if pisugar-server is already installed
+    if command -v pisugar-server >/dev/null 2>&1 || systemctl list-unit-files pisugar-server.service >/dev/null 2>&1; then
+        log "INFO" "PiSugar server is already installed"
+        echo -e "${GREEN}✓ PiSugar server already installed${NC}"
+        return 0
+    fi
+
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  PiSugar UPS Support${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}PiSugar provides battery power, battery monitoring, and a${NC}"
+    echo -e "${BLUE}hardware button for Ragnar. If you have a PiSugar UPS${NC}"
+    echo -e "${BLUE}attached, the pisugar-server daemon is required.${NC}"
+    echo ""
+    read -p "Do you have a PiSugar UPS? Install pisugar-server? (y/n): " install_pisugar
+
+    if [ "$install_pisugar" != "y" ] && [ "$install_pisugar" != "Y" ]; then
+        log "INFO" "User opted out of PiSugar server installation"
+        echo -e "${YELLOW}Skipping PiSugar server installation${NC}"
+        return 0
+    fi
+
+    log "INFO" "Installing PiSugar power manager server..."
+    echo -e "${BLUE}Downloading and installing PiSugar power manager...${NC}"
+
+    if curl -sSL http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash; then
+        log "SUCCESS" "PiSugar server installed successfully"
+        echo -e "${GREEN}✓ PiSugar server installed${NC}"
+
+        # Enable and start the service
+        if systemctl enable pisugar-server 2>/dev/null; then
+            log "SUCCESS" "PiSugar server service enabled"
+        fi
+        if systemctl start pisugar-server 2>/dev/null; then
+            log "SUCCESS" "PiSugar server service started"
+        fi
+    else
+        log "WARNING" "PiSugar server installation failed"
+        echo -e "${YELLOW}⚠ PiSugar server installation failed${NC}"
+        echo -e "${YELLOW}  You can install it manually later:${NC}"
+        echo -e "${YELLOW}  curl http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash${NC}"
+    fi
+}
+
 configure_interfaces() {
     log "INFO" "Configuring SPI and I2C interfaces..."
 
@@ -1481,20 +1533,23 @@ except:
     CURRENT_STEP=5; show_progress "Configuring interfaces"
     configure_interfaces
 
-    CURRENT_STEP=6; show_progress "Setting up ragnar"
+    CURRENT_STEP=6; show_progress "Installing PiSugar server (if applicable)"
+    install_pisugar_server
+
+    CURRENT_STEP=7; show_progress "Setting up ragnar"
     setup_ragnar
 
-    CURRENT_STEP=7; show_progress "Configuring USB Gadget"
+    CURRENT_STEP=8; show_progress "Configuring USB Gadget"
     configure_usb_gadget
 
-    CURRENT_STEP=8; show_progress "Setting up services"
+    CURRENT_STEP=9; show_progress "Setting up services"
     setup_services
 
-    CURRENT_STEP=8; show_progress "Verifying installation"
+    CURRENT_STEP=9; show_progress "Verifying installation"
     verify_installation
 
     # Check if system qualifies for advanced tools (8GB+ RAM, not Pi Zero)
-    CURRENT_STEP=9; show_progress "Checking for advanced security tools eligibility"
+    CURRENT_STEP=10; show_progress "Checking for advanced security tools eligibility"
     
     # Detect if this is a Pi Zero (insufficient resources for advanced tools)
     IS_PI_ZERO=false

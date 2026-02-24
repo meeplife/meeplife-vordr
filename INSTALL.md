@@ -28,6 +28,10 @@ I did not develop ragnar for the raspberry pi zero w2 64bits, but several feedba
       - Debian version: Debian GNU/Linux 13 (trixie)'
 - Username and hostname set to `ragnar`.
 - 2.13-inch e-Paper HAT connected to GPIO pins.
+- **Optional:** [PiSugar UPS](https://www.pisugar.com/) for battery power, battery monitoring, and hardware button support. The installer will prompt you to install `pisugar-server` if you have one attached. You can also install it manually later:
+  ```bash
+  curl http://cdn.pisugar.com/release/pisugar-power-manager.sh | sudo bash
+  ```
 
 
 At the moment the paper screen v2  v4 have been tested and implemented.
