@@ -30,10 +30,27 @@ except ImportError:
     Image = None
     ImageFont = None
 from logger import Logger
-from epd_helper import EPDHelper
-from db_manager import get_db
-from network_storage import NetworkStorageManager
-from multi_interface import MultiInterfaceState, NetworkContextRegistry
+
+try:
+    from epd_helper import EPDHelper
+except ImportError:
+    EPDHelper = None
+
+try:
+    from db_manager import get_db
+except ImportError:
+    get_db = None
+
+try:
+    from network_storage import NetworkStorageManager
+except ImportError:
+    NetworkStorageManager = None
+
+try:
+    from multi_interface import MultiInterfaceState, NetworkContextRegistry
+except ImportError:
+    MultiInterfaceState = None
+    NetworkContextRegistry = None
 
 DEFAULT_EPD_TYPE = "epd2in13_V4"
 DISPLAY_PROFILES = {
@@ -49,41 +66,65 @@ logger = Logger(name="shared.py", level=logging.DEBUG) # Create a logger object
 class SharedData:
     """Shared data between the different modules."""
     def __init__(self):
+        # Detect Pager mode (set by pager_payload.sh before Python launch)
+        self._pager_mode = os.environ.get('RAGNAR_PAGER_MODE') == '1'
+
         self.initialize_paths() # Initialize the paths used by the application
-        self.storage_manager = NetworkStorageManager(self.datadir)
+
+        # --- Network storage & context (not available on Pager) ---
+        if not self._pager_mode and NetworkStorageManager is not None:
+            self.storage_manager = NetworkStorageManager(self.datadir)
+        else:
+            self.storage_manager = None
         self.active_network_ssid = None
         self.active_network_slug = None
         self.current_network_dir = None
         self.current_network_db_path = None
         self.network_intelligence_dir = None
         self.network_threat_dir = None
-        self._apply_network_context(
-            self.storage_manager.get_active_context(),
-            configure_db=False
-        )
-        self.context_registry = NetworkContextRegistry(self)
-        self.status_list = [] 
+        if self.storage_manager is not None:
+            self._apply_network_context(
+                self.storage_manager.get_active_context(),
+                configure_db=False
+            )
+        if not self._pager_mode and NetworkContextRegistry is not None:
+            self.context_registry = NetworkContextRegistry(self)
+        else:
+            self.context_registry = None
+
+        self.status_list = []
         self.last_comment_time = time.time() # Last time a comment was displayed
         self._stats_lock = threading.Lock()  # Thread-safe lock for update_stats()
-        self.default_config = self.get_default_config() # Default configuration of the application  
+        self.default_config = self.get_default_config() # Default configuration of the application
         self.config = self.default_config.copy() # Configuration of the application
         # Load existing configuration first
         self.load_config()
-        self.multi_interface_state = MultiInterfaceState(self)
+
+        if not self._pager_mode and MultiInterfaceState is not None:
+            self.multi_interface_state = MultiInterfaceState(self)
+        else:
+            self.multi_interface_state = None
+
         # Ensure the selected EPD profile is consistent and expose flip settings early
         self.config.setdefault('epd_type', DEFAULT_EPD_TYPE)
-        self.apply_display_profile(self.config['epd_type'], set_orientation_if_missing=True, persist=True)
+        self.apply_display_profile(self.config['epd_type'], set_orientation_if_missing=True, persist=not self._pager_mode)
         self.screen_reversed = bool(self.config.get('screen_reversed', False))
         self.web_screen_reversed = self.screen_reversed
 
         # Check if auth is configured and DB might be encrypted
-        self.auth_configured = self._check_auth_configured()
+        if not self._pager_mode:
+            self.auth_configured = self._check_auth_configured()
+        else:
+            self.auth_configured = False
 
         # Initialize SQLite database manager
         # If auth is configured and DB is encrypted, db may be None until login
-        self.db = get_db(currentdir=self.currentdir)
-        self._configure_database()
-        
+        if not self._pager_mode and get_db is not None:
+            self.db = get_db(currentdir=self.currentdir)
+            self._configure_database()
+        else:
+            self.db = None
+
         # Update MAC blacklist without immediate save
         self.update_mac_blacklist()
         self.setup_environment(clear_console=False) # Setup the environment without clearing console
@@ -92,23 +133,29 @@ class SharedData:
 
         # Initialize network intelligence (after paths and config are ready)
         self.network_intelligence = None
-        self.initialize_network_intelligence()
+        if not self._pager_mode:
+            self.initialize_network_intelligence()
         self.threat_intelligence = None  # type: ignore
-        
+
         # Initialize AI service (after paths and config are ready)
         self.ai_service = None
-        self.initialize_ai_service()
-        
+        if not self._pager_mode:
+            self.initialize_ai_service()
+
         # Initialize counters for dashboard
-        self.scanned_networks_count = self._calculate_scanned_networks_count()
-        
-        self.create_livestatusfile() 
+        if not self._pager_mode:
+            self.scanned_networks_count = self._calculate_scanned_networks_count()
+        else:
+            self.scanned_networks_count = 0
+
+        self.create_livestatusfile()
         self.load_fonts() # Load the fonts used by the application
         self.load_images() # Load the images used by the application
         # self.create_initial_image() # Create the initial image displayed on the screen
-        
-        # Start background cleanup task for old hosts
-        self._start_cleanup_task()
+
+        # Start background cleanup task for old hosts (needs DB)
+        if not self._pager_mode and self.db is not None:
+            self._start_cleanup_task()
         
     def initialize_network_intelligence(self):
         """Initialize the network intelligence system"""
@@ -263,6 +310,8 @@ class SharedData:
 
     def _configure_database(self):
         """Point the singleton database at the active network store."""
+        if get_db is None or self._pager_mode:
+            return
         if not self.current_network_dir or not self.current_network_db_path:
             return
         db = get_db(currentdir=self.currentdir)
@@ -563,7 +612,12 @@ class SharedData:
             os.system('cls' if os.name == 'nt' else 'clear')
         self.create_directories()  # Create all necessary directories first
         self.save_config()
-        self.generate_actions_json()
+        if self._pager_mode:
+            # On Pager: action modules need pandas/rich which aren't available,
+            # so load existing actions.json instead of regenerating it.
+            self._load_status_list_from_actions_json()
+        else:
+            self.generate_actions_json()
         self.delete_webconsolelog()
         self.initialize_csv()
         self.initialize_epd_display()
@@ -631,6 +685,17 @@ class SharedData:
     #         raise
     def initialize_epd_display(self):
         """Initialize the e-paper display."""
+        if EPDHelper is None or self._pager_mode:
+            logger.info("EPD not available (Pager mode or missing module) - skipping EPD init")
+            self.epd_helper = None
+            fallback_profile = DISPLAY_PROFILES.get(DEFAULT_EPD_TYPE, {"ref_width": 122, "ref_height": 250, "default_flip": False})
+            epd_type = self.config.get('epd_type') or DEFAULT_EPD_TYPE
+            profile = DISPLAY_PROFILES.get(epd_type, fallback_profile) or fallback_profile
+            self.width = self.config.get('ref_width', profile['ref_width'])
+            self.height = self.config.get('ref_height', profile['ref_height'])
+            self.screen_reversed = bool(self.config.get('screen_reversed', False))
+            self.web_screen_reversed = self.screen_reversed
+            return
         try:
             logger.info("Initializing EPD display...")
             time.sleep(1)
@@ -928,6 +993,23 @@ class SharedData:
         except Exception as e:
             logger.error(f"Unexpected error in generate_actions_json: {e}")
 
+    def _load_status_list_from_actions_json(self):
+        """Load status_list from an existing actions.json (Pager mode).
+        On the Pager, action modules can't be imported (missing pandas/rich),
+        so we read the pre-deployed actions.json instead of regenerating it."""
+        try:
+            if os.path.exists(self.actions_file):
+                with open(self.actions_file, 'r') as f:
+                    actions = json.load(f)
+                    for action in actions:
+                        b_class = action.get('b_class')
+                        if b_class and b_class not in self.status_list:
+                            self.status_list.append(b_class)
+                logger.info(f"Loaded {len(self.status_list)} action statuses from actions.json")
+            else:
+                logger.warning("actions.json not found - status animations will be unavailable")
+        except Exception as e:
+            logger.error(f"Error loading actions.json: {e}")
 
     def initialize_csv(self):
         """Initialize the network knowledge base CSV file with headers."""

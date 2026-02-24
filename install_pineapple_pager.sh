@@ -426,6 +426,20 @@ ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "chmod +x ${PAGER_PAYLOAD_DIR}/payload
 
 log "SUCCESS" "Permissions set"
 
+# Fix libsodium symlinks (git on Windows stores symlinks as text files)
+log "INFO" "Fixing libsodium symlinks..."
+ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "
+    cd ${PAGER_PAYLOAD_DIR}/lib
+    # If libsodium.so is a text file instead of a real symlink, recreate it
+    if [ -f libsodium.so.26.1.0 ]; then
+        rm -f libsodium.so libsodium.so.26 2>/dev/null
+        ln -sf libsodium.so.26.1.0 libsodium.so.26
+        ln -sf libsodium.so.26 libsodium.so
+        echo 'Recreated libsodium symlinks'
+    fi
+"
+log "SUCCESS" "Library symlinks fixed"
+
 # ============================================================
 # Step 7: Setup system-wide libpagerctl.so
 # ============================================================
