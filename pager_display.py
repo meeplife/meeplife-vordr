@@ -107,6 +107,9 @@ class PagerDisplay:
         self.last_led_status = None
         self.dialog_showing = False
 
+        # Handoff launcher path (set by show_exit_confirmation when switching payloads)
+        self._handoff_launcher_path = None
+
         # Brightness/dim settings
         self.screen_brightness = getattr(self.shared_data, 'screen_brightness', 80)
         self.screen_dim_brightness = getattr(self.shared_data, 'screen_dim_brightness', 20)

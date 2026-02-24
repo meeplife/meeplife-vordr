@@ -1,35 +1,58 @@
-#!/bin/bash
+#!/bin/sh
 # Title: Ragnar
 # Description: Autonomous network reconnaissance and security scanning tool for WiFi Pineapple Pager - Network scanning, vulnerability assessment, brute force, and data exfiltration with Viking personality
 # Author: PierreGode / Ragnar Project
-# Version: 1.0
+# Version: 1.2
 # Category: Reconnaissance
 # Library: libpagerctl.so (pagerctl)
 
 # Payload directory (standard Pager installation path)
 PAYLOAD_DIR="/root/payloads/user/reconnaissance/pager_ragnar"
 DATA_DIR="$PAYLOAD_DIR/data"
+LOG_FILE="$DATA_DIR/payload.log"
+
+# Create data directory early so we can log
+mkdir -p "$DATA_DIR" 2>/dev/null
+
+# Internal logging helper - always writes to file, uses DuckyScript LOG when available
+_log() {
+    local color=""
+    local msg="$*"
+    if [ $# -ge 2 ]; then
+        case "$1" in
+            red|green|yellow|cyan|blue|magenta|purple)
+                color="$1"
+                shift
+                msg="$*"
+                ;;
+        esac
+    fi
+    echo "[$(date '+%H:%M:%S')] $msg" >> "$LOG_FILE" 2>/dev/null
+    if [ -n "$color" ]; then
+        LOG "$color" "$msg" 2>/dev/null || true
+    else
+        LOG "$msg" 2>/dev/null || true
+    fi
+}
 
 cd "$PAYLOAD_DIR" || {
     LOG "red" "ERROR: $PAYLOAD_DIR not found"
     exit 1
 }
 
+# Truncate log on fresh start
+echo "=== Ragnar payload started $(date) ===" > "$LOG_FILE"
+
 #
 # Find and setup pagerctl dependencies (libpagerctl.so + pagerctl.py)
+# Check bundled locations first, then PAGERCTL utilities dir
 #
 PAGERCTL_FOUND=false
-PAGERCTL_SEARCH_PATHS=(
-    "$PAYLOAD_DIR/lib"
-    "$PAYLOAD_DIR"
-    "/root/lib"
-    "/mmc/root/payloads/user/utilities/PAGERCTL"
-)
-
-for dir in "${PAGERCTL_SEARCH_PATHS[@]}"; do
+for dir in "$PAYLOAD_DIR/lib" "$PAYLOAD_DIR" "/root/lib" "/mmc/root/payloads/user/utilities/PAGERCTL"; do
     if [ -f "$dir/libpagerctl.so" ]; then
         PAGERCTL_DIR="$dir"
         PAGERCTL_FOUND=true
+        _log "Found libpagerctl.so in $dir"
         break
     fi
 done
@@ -41,7 +64,7 @@ if [ "$PAGERCTL_FOUND" = false ]; then
     LOG "red" "libpagerctl.so not found!"
     LOG ""
     LOG "Searched:"
-    for dir in "${PAGERCTL_SEARCH_PATHS[@]}"; do
+    for dir in "$PAYLOAD_DIR/lib" "$PAYLOAD_DIR" "/root/lib" "/mmc/root/payloads/user/utilities/PAGERCTL"; do
         LOG "  $dir"
     done
     LOG ""
@@ -54,7 +77,7 @@ if [ "$PAGERCTL_FOUND" = false ]; then
 fi
 
 # If pagerctl files aren't in our lib dir, copy them there
-if [ "$PAGERCTL_DIR" != "$PAYLOAD_DIR/lib" ] && [ "$PAGERCTL_DIR" != "$PAYLOAD_DIR" ]; then
+if [ "$PAGERCTL_DIR" != "$PAYLOAD_DIR/lib" ]; then
     mkdir -p "$PAYLOAD_DIR/lib" 2>/dev/null
     cp "$PAGERCTL_DIR/libpagerctl.so" "$PAYLOAD_DIR/lib/" 2>/dev/null
     [ -f "$PAGERCTL_DIR/pagerctl.py" ] && cp "$PAGERCTL_DIR/pagerctl.py" "$PAYLOAD_DIR/lib/" 2>/dev/null
@@ -63,15 +86,17 @@ fi
 
 #
 # Setup local paths for bundled binaries and libraries
+# Uses libpagerctl.so for display/input handling
+# MMC paths needed when python3 installed with opkg -d mmc
 #
 export PATH="/mmc/usr/bin:$PAYLOAD_DIR/bin:$PATH"
 export PYTHONPATH="$PAYLOAD_DIR/lib:$PAYLOAD_DIR:$PYTHONPATH"
-export LD_LIBRARY_PATH="/root/lib:/mmc/usr/lib:$PAYLOAD_DIR/lib:$PAYLOAD_DIR:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="/mmc/usr/lib:$PAYLOAD_DIR/lib:$PAYLOAD_DIR:$LD_LIBRARY_PATH"
 export CRYPTOGRAPHY_OPENSSL_NO_LEGACY=1
 export RAGNAR_PAGER_MODE=1
 
 #
-# Check for Python3 and python3-ctypes
+# Check for Python3 and python3-ctypes - required system dependencies
 #
 NEED_PYTHON=false
 NEED_CTYPES=false
@@ -134,8 +159,7 @@ fi
 # Check nmap dependency
 #
 check_dependencies() {
-    LOG ""
-    LOG "Checking dependencies..."
+    _log "Checking dependencies..."
 
     if ! command -v nmap >/dev/null 2>&1; then
         LOG ""
@@ -151,7 +175,57 @@ check_dependencies() {
         fi
     fi
 
-    LOG "green" "All dependencies found!"
+    _log green "All dependencies found!"
+}
+
+#
+# Pre-flight: Validate Python can import critical modules BEFORE stopping pineapple
+#
+preflight_python() {
+    _log "Running Python pre-flight checks..."
+
+    local result
+    result=$(python3 -c "
+import sys, os
+sys.path.insert(0, os.path.join('$PAYLOAD_DIR', 'lib'))
+sys.path.insert(0, '$PAYLOAD_DIR')
+errors = []
+try:
+    from pagerctl import Pager
+except Exception as e:
+    errors.append(f'pagerctl: {e}')
+try:
+    import json, threading, time, subprocess, signal
+except Exception as e:
+    errors.append(f'stdlib: {e}')
+try:
+    import shared
+except Exception as e:
+    errors.append(f'shared: {e}')
+if errors:
+    print('FAIL:' + '|'.join(errors))
+    sys.exit(1)
+else:
+    print('OK')
+    sys.exit(0)
+" 2>&1)
+
+    if [ $? -ne 0 ]; then
+        LOG ""
+        LOG "red" "=== PRE-FLIGHT FAILED ==="
+        LOG "red" "Python module import errors:"
+        echo "$result" | while IFS= read -r line; do
+            LOG "red" "  $line"
+            echo "$line" >> "$LOG_FILE"
+        done
+        LOG ""
+        LOG "Check $LOG_FILE for details."
+        LOG "Press any button to exit..."
+        WAIT_FOR_INPUT >/dev/null 2>&1
+        exit 1
+    fi
+
+    _log "Pre-flight OK"
 }
 
 # ============================================================
@@ -159,10 +233,14 @@ check_dependencies() {
 # ============================================================
 
 cleanup() {
-    # Re-register and start pager service (undoes the procd deregister below)
-    /etc/init.d/pineapplepager start 2>/dev/null
+    _log "Cleanup: restarting pineapplepager service"
+    # Restart pager service if not running
+    if ! pgrep -x pineapple >/dev/null; then
+        /etc/init.d/pineapplepager start 2>/dev/null
+    fi
 }
 
+# Ensure pager service restarts on exit
 trap cleanup EXIT
 
 # ============================================================
@@ -171,17 +249,14 @@ trap cleanup EXIT
 
 check_dependencies
 
-# Check network connectivity
+# Check network connectivity (at least one interface with IP)
 HAS_NETWORK=false
-while IFS= read -r line; do
-    if [[ "$line" =~ inet\ ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]]; then
-        IP="${BASH_REMATCH[1]}"
-        if [[ "$IP" != "127.0.0.1" ]]; then
-            HAS_NETWORK=true
-            break
-        fi
+for IP in $(ip -4 addr 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1); do
+    if [ "$IP" != "127.0.0.1" ]; then
+        HAS_NETWORK=true
+        break
     fi
-done < <(ip addr 2>/dev/null)
+done
 
 if [ "$HAS_NETWORK" = false ]; then
     LOG ""
@@ -196,6 +271,9 @@ if [ "$HAS_NETWORK" = false ]; then
     WAIT_FOR_INPUT >/dev/null 2>&1
     exit 1
 fi
+
+# Pre-flight Python check (while pineapple is still alive so errors show on LCD)
+preflight_python
 
 # Show splash screen
 LOG ""
@@ -227,62 +305,44 @@ while true; do
     esac
 done
 
-# Create data directory
-mkdir -p "$DATA_DIR" 2>/dev/null
-
-# Take exclusive LCD control from the Pineapple system.
-# Two processes share the LCD:
-#   pineapple  = main UI server (handles LCD, buttons, payloads)
-#   pineapd    = PineAP WiFi daemon
-#
-# CRITICAL: Kill pineapple FIRST. If we only kill pineapd (as init.d stop does),
-# the pineapple process detects the death and auto-restarts everything:
-#   "[CRITICAL] [PINEAP] PineAPd not available, restarting service"
-# This steals the LCD back from Ragnar within seconds.
-
-LOG "Starting Ragnar..."
-
-# Protect ourselves: pineapple may signal its process group on death
-trap '' TERM HUP
-
-# 1. Kill the main pineapple UI server first (prevents restart cascade)
-killall -TERM pineapple 2>/dev/null
-sleep 0.3
-
-# 2. Kill the PineAP daemon
-killall -TERM pineapd 2>/dev/null
-sleep 0.3
-
-# 3. Deregister service from procd to prevent auto-respawn
-ubus call service delete '{"name":"pineapplepager"}' 2>/dev/null
-
-# 4. Ensure both processes are fully dead (SIGKILL as fallback)
-killall -KILL pineapple 2>/dev/null
-killall -KILL pineapd 2>/dev/null
+# Stop pager service and show spinner while initializing
+SPINNER_ID=$(START_SPINNER "Starting Ragnar...")
+/etc/init.d/pineapplepager stop 2>/dev/null
 sleep 0.5
-
-# Restore signal handling (cleanup trap still fires on EXIT)
-trap cleanup EXIT
+STOP_SPINNER "$SPINNER_ID" 2>/dev/null
 
 # Payload loop with handoff support
+# Python writes the target launch script path to data/.next_payload
 NEXT_PAYLOAD_FILE="$DATA_DIR/.next_payload"
 
 while true; do
     cd "$PAYLOAD_DIR"
-    python3 pager_menu.py
+    _log "Launching pager_menu.py..."
+    python3 pager_menu.py >> "$LOG_FILE" 2>&1
     EXIT_CODE=$?
+    _log "pager_menu.py exited with code $EXIT_CODE"
 
+    # Exit code 42 = hand off to another payload
     if [ "$EXIT_CODE" -eq 42 ] && [ -f "$NEXT_PAYLOAD_FILE" ]; then
         NEXT_SCRIPT=$(cat "$NEXT_PAYLOAD_FILE")
         rm -f "$NEXT_PAYLOAD_FILE"
         if [ -f "$NEXT_SCRIPT" ]; then
-            bash "$NEXT_SCRIPT"
+            _log "Handing off to $NEXT_SCRIPT"
+            sh "$NEXT_SCRIPT"
+            # Only loop back to Ragnar if launched app exits 42
             [ $? -eq 42 ] && continue
         fi
     fi
 
+    # Exit code 99 = return to main menu (from pause menu)
     if [ "$EXIT_CODE" -eq 99 ]; then
+        _log "Returning to menu (exit code 99)"
         continue
+    fi
+
+    # If pager_menu.py crashed, log it
+    if [ "$EXIT_CODE" -ne 0 ]; then
+        _log red "pager_menu.py failed (exit $EXIT_CODE)"
     fi
 
     break

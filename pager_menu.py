@@ -390,6 +390,7 @@ class RagnarMenu:
 def main():
     """Main entry point: menu loop -> launch Ragnar -> repeat."""
     menu = None
+    log_file = os.path.join(DATA_DIR, 'payload.log')
     try:
         while True:
             interfaces = detect_interfaces()
@@ -416,23 +417,37 @@ def main():
             menu.cleanup()
             menu = None
 
+            # Small delay to let the display hardware settle after cleanup
+            time.sleep(0.3)
+
             # Launch PagerRagnar as subprocess
             env = os.environ.copy()
             env['RAGNAR_INTERFACE'] = result['interface']
             env['RAGNAR_IP'] = result['ip']
             env['RAGNAR_WEB_UI'] = 'on' if result['web_ui'] else 'off'
 
-            proc = subprocess.run(
-                ['python3', 'PagerRagnar.py'],
-                cwd=PAYLOAD_DIR,
-                env=env,
-            )
+            # Open log for capturing subprocess output
+            try:
+                os.makedirs(DATA_DIR, exist_ok=True)
+                with open(log_file, 'a') as lf:
+                    lf.write(f"\n=== PagerRagnar.py starting at {time.strftime('%H:%M:%S')} ===\n")
+                    proc = subprocess.run(
+                        ['python3', 'PagerRagnar.py'],
+                        cwd=PAYLOAD_DIR,
+                        env=env,
+                        stdout=lf,
+                        stderr=lf,
+                    )
+            except Exception as e:
+                sys.stderr.write(f"Failed to launch PagerRagnar.py: {e}\n")
+                break
 
             if proc.returncode == 42:
                 sys.exit(42)
             elif proc.returncode == 99:
                 continue
             elif proc.returncode != 0:
+                sys.stderr.write(f"PagerRagnar.py exited with code {proc.returncode}\n")
                 break
 
             break
@@ -440,6 +455,7 @@ def main():
         pass
     except Exception as e:
         sys.stderr.write(f"Menu error: {e}\n")
+        traceback.print_exc(file=sys.stderr)
     finally:
         if menu:
             menu.cleanup()
