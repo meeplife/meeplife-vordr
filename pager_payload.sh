@@ -229,15 +229,41 @@ else:
 }
 
 # ============================================================
-# CLEANUP
+# DISPLAY TAKEOVER & CLEANUP
 # ============================================================
 
+take_over_display() {
+    # Protect ourselves from parent process group signals during the kill.
+    # The pineapple process is our grandparent; killing it sends TERM to our
+    # process group unless we ignore it first.
+    trap '' TERM HUP
+
+    _log "Taking over display from pineapple service..."
+
+    # 1. Kill the pineapple UI server FIRST.
+    #    If we only stop pineapd (via init.d), pineapple detects it and
+    #    triggers a full restart cascade that steals the LCD back.
+    killall pineapple 2>/dev/null
+    sleep 0.3
+
+    # 2. Kill the PineAP daemon
+    killall pineapd 2>/dev/null
+    sleep 0.2
+
+    # 3. Deregister the service from procd so it won't auto-restart
+    ubus call service delete '{"name":"pineapplepager"}' 2>/dev/null
+
+    # 4. Restore our EXIT trap (cleanup) now that the kill is done
+    trap cleanup EXIT
+    trap - TERM HUP
+
+    _log green "Display takeover complete"
+}
+
 cleanup() {
-    _log "Cleanup: restarting pineapplepager service"
-    # Restart pager service if not running
-    if ! pgrep -x pineapple >/dev/null; then
-        /etc/init.d/pineapplepager start 2>/dev/null
-    fi
+    _log "Cleanup: restarting pineapplepager service..."
+    # Re-register and start the pager service so the normal Pager UI comes back
+    /etc/init.d/pineapplepager start 2>/dev/null
 }
 
 # Ensure pager service restarts on exit
@@ -305,11 +331,11 @@ while true; do
     esac
 done
 
-# Stop pager service and show spinner while initializing
-SPINNER_ID=$(START_SPINNER "Starting Ragnar...")
-/etc/init.d/pineapplepager stop 2>/dev/null
-sleep 0.5
-STOP_SPINNER "$SPINNER_ID" 2>/dev/null
+# Take over the LCD from the pineapple service.
+# Must kill pineapple (UI) + pineapd (PineAP) + deregister from procd.
+LOG "Starting Ragnar..."
+take_over_display
+sleep 0.3
 
 # Payload loop with handoff support
 # Python writes the target launch script path to data/.next_payload

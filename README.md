@@ -101,10 +101,10 @@ The portal supports network scanning with signal strength, manual entry for hidd
 ### WiFi Pineapple Pager
 
 - Firmware 1.0.7+
-- PAGERCTL payload installed
+- PAGERCTL payload installed (provides libpagerctl.so)
 - SSH access from your workstation
 - Python3 + nmap (auto-installed on first run)
-- [pineapple_pager_bjorn](https://github.com/brAinphreAk/pineapple_pager_bjorn) cloned alongside Ragnar (provides MIPS-compiled Python libraries)
+- MIPS-compiled Python libraries bundled in `pager_lib/` (or sourced from PAGERCTL payload)
 
 ---
 
