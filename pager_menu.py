@@ -111,6 +111,7 @@ class RagnarMenu:
         self.gfx = Pager()
         self.gfx.init()
         self.gfx.set_rotation(270)  # Landscape 480x222
+        self.gfx.clear_input_events()  # Flush stale events from service takeover
 
     def cleanup(self):
         if hasattr(self, 'gfx'):
@@ -119,7 +120,6 @@ class RagnarMenu:
     def _wait_button(self):
         """Wait for a button press using thread-safe event queue."""
         while True:
-            self.gfx.poll_input()
             event = self.gfx.get_input_event()
             if event:
                 button, event_type, timestamp = event

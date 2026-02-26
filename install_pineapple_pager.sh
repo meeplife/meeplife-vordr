@@ -128,16 +128,12 @@ fi
 
 log "INFO" "Checking for libpagerctl.so..."
 
-# First check if we have it bundled in Ragnar itself
+# Check if we have it bundled in Ragnar itself
 RAGNAR_PAGERCTL="${RAGNAR_DIR}/libpagerctl.so"
-BJORN_PAGERCTL_CHECK="${RAGNAR_DIR}/../pineapple_pager_bjorn/payloads/user/reconnaissance/pager_bjorn/libpagerctl.so"
 
 if [ -f "$RAGNAR_PAGERCTL" ]; then
     log "SUCCESS" "Found libpagerctl.so in Ragnar (will be bundled)"
     PAGERCTL_SOURCE="ragnar"
-elif [ -f "$BJORN_PAGERCTL_CHECK" ]; then
-    log "SUCCESS" "Found libpagerctl.so in pineapple_pager_bjorn (will be bundled)"
-    PAGERCTL_SOURCE="bjorn"
 else
     # Check if it exists on the Pager already
     PAGERCTL_FOUND=$(ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "
@@ -244,10 +240,10 @@ for f in "${CORE_FILES[@]}"; do
     fi
 done
 
-# Rename payload.sh for Pager launcher
+# Rename to standard Pager payload filename
 if [ -f "${PAYLOAD_STAGE}/pager_payload.sh" ]; then
-    mv "${PAYLOAD_STAGE}/pager_payload.sh" "${PAYLOAD_STAGE}/payload.sh"
-    chmod +x "${PAYLOAD_STAGE}/payload.sh"
+    mv "${PAYLOAD_STAGE}/pager_payload.sh" "${PAYLOAD_STAGE}/payload"
+    chmod +x "${PAYLOAD_STAGE}/payload"
 fi
 
 # Copy actions directory
@@ -325,17 +321,12 @@ log "INFO" "Bundling Python dependencies..."
 LIB_DIR="${PAYLOAD_STAGE}/lib"
 mkdir -p "${LIB_DIR}"
 
-# Check for bundled libraries - first in Ragnar/pager_lib, then in pineapple_pager_bjorn
+# Check for bundled MIPS-compiled libraries in Ragnar/pager_lib
 RAGNAR_LIB_DIR="${RAGNAR_DIR}/pager_lib"
-BJORN_LIB_DIR="${RAGNAR_DIR}/../pineapple_pager_bjorn/payloads/user/reconnaissance/pager_bjorn/lib"
 
 if [ -d "$RAGNAR_LIB_DIR" ]; then
     log "INFO" "Found bundled libraries in Ragnar/pager_lib, copying..."
     cp -r "${RAGNAR_LIB_DIR}/"* "${LIB_DIR}/" 2>/dev/null || true
-    log "SUCCESS" "Copied bundled Python libraries"
-elif [ -d "$BJORN_LIB_DIR" ]; then
-    log "INFO" "Found bundled libraries from pineapple_pager_bjorn, copying..."
-    cp -r "${BJORN_LIB_DIR}/"* "${LIB_DIR}/" 2>/dev/null || true
     log "SUCCESS" "Copied bundled Python libraries"
 else
     log "WARNING" "MIPS Python libraries not found"
@@ -357,17 +348,11 @@ fi
 # ============================================================
 
 RAGNAR_BIN_DIR="${RAGNAR_DIR}/pager_bin"
-BJORN_BIN_DIR="${RAGNAR_DIR}/../pineapple_pager_bjorn/payloads/user/reconnaissance/pager_bjorn/bin"
 
 if [ -d "$RAGNAR_BIN_DIR" ]; then
     log "INFO" "Copying binary dependencies from Ragnar/pager_bin..."
     mkdir -p "${PAYLOAD_STAGE}/bin"
     cp -r "${RAGNAR_BIN_DIR}/"* "${PAYLOAD_STAGE}/bin/" 2>/dev/null || true
-    log "SUCCESS" "Copied binary dependencies"
-elif [ -d "$BJORN_BIN_DIR" ]; then
-    log "INFO" "Copying binary dependencies from pineapple_pager_bjorn..."
-    mkdir -p "${PAYLOAD_STAGE}/bin"
-    cp -r "${BJORN_BIN_DIR}/"* "${PAYLOAD_STAGE}/bin/" 2>/dev/null || true
     log "SUCCESS" "Copied binary dependencies"
 fi
 
@@ -376,7 +361,6 @@ fi
 # ============================================================
 
 RAGNAR_PAGERCTL="${RAGNAR_DIR}/libpagerctl.so"
-BJORN_PAGERCTL="${RAGNAR_DIR}/../pineapple_pager_bjorn/payloads/user/reconnaissance/pager_bjorn/libpagerctl.so"
 
 copy_pagerctl() {
     local src="$1"
@@ -389,10 +373,6 @@ copy_pagerctl() {
 if [ -f "$RAGNAR_PAGERCTL" ]; then
     log "INFO" "Copying libpagerctl.so from Ragnar..."
     copy_pagerctl "${RAGNAR_PAGERCTL}"
-    log "SUCCESS" "Copied libpagerctl.so (Pager display library)"
-elif [ -f "$BJORN_PAGERCTL" ]; then
-    log "INFO" "Copying libpagerctl.so from pineapple_pager_bjorn..."
-    copy_pagerctl "${BJORN_PAGERCTL}"
     log "SUCCESS" "Copied libpagerctl.so (Pager display library)"
 elif [ "$PAGERCTL_SOURCE" = "pager" ]; then
     # Copy from an existing payload on the Pager
@@ -422,7 +402,7 @@ scp $SSH_OPTS -r "${PAYLOAD_STAGE}/"* "${PAGER_USER}@${PAGER_IP}:${PAGER_PAYLOAD
 log "SUCCESS" "Payload deployed to ${PAGER_PAYLOAD_DIR}"
 
 # Set permissions
-ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "chmod +x ${PAGER_PAYLOAD_DIR}/payload.sh && chmod -R 755 ${PAGER_PAYLOAD_DIR}"
+ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "chmod +x ${PAGER_PAYLOAD_DIR}/payload && chmod -R 755 ${PAGER_PAYLOAD_DIR}"
 
 log "SUCCESS" "Permissions set"
 
@@ -475,7 +455,7 @@ VERIFY_RESULT=$(ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "
     errors=0
     
     # Check core files
-    for f in pager_menu.py pagerctl.py libpagerctl.so payload.sh; do
+    for f in pager_menu.py pagerctl.py libpagerctl.so payload; do
         if [ ! -f ${PAGER_PAYLOAD_DIR}/\$f ]; then
             echo \"MISSING: \$f\"
             errors=\$((errors + 1))
