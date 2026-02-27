@@ -45,7 +45,8 @@ The fastest way to install ragnar is using the automatic installation script :
 # Download and run the installer
 wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
 sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
-# Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.```
+# Choose the choice 1 for automatic installation. It may take a while as a lot of packages and modules will be installed. You must reboot at the end.
+```
 
 ### 🧰 Manual Install
 
