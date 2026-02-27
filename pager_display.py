@@ -258,10 +258,21 @@ class PagerDisplay:
             return
         self._last_data_refresh = now
 
-        # Hosts from netkb.csv
+        # Hosts from SQLite DB (primary) or netkb.csv (fallback)
         self._hosts_data = []
         try:
-            if os.path.exists(self.shared_data.netkbfile):
+            if self.shared_data.db is not None:
+                for h in self.shared_data.db.get_all_hosts():
+                    if h.get('mac') == 'STANDALONE':
+                        continue
+                    self._hosts_data.append({
+                        'ip': h.get('ip', '?'),
+                        'hostname': h.get('hostname', ''),
+                        'alive': h.get('status') == 'alive',
+                        'ports': h.get('ports', ''),
+                        'mac': h.get('mac', ''),
+                    })
+            elif os.path.exists(self.shared_data.netkbfile):
                 with open(self.shared_data.netkbfile, 'r') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
@@ -759,7 +770,22 @@ class PagerDisplay:
     def update_shared_data(self):
         with self.semaphore:
             try:
-                if os.path.exists(self.shared_data.livestatusfile):
+                # Read stats from SQLite DB (primary source)
+                if self.shared_data.db is not None:
+                    try:
+                        db_stats = self.shared_data.db.get_stats()
+                        hosts = self.shared_data.db.get_all_hosts()
+                        alive = [h for h in hosts if h.get('status') == 'alive']
+                        self.shared_data.targetnbr = len(alive)
+                        self.shared_data.networkkbnbr = db_stats.get('total_hosts', 0)
+                        self.shared_data.portnbr = sum(
+                            len(h['ports'].split(',')) for h in alive if h.get('ports')
+                        )
+                        self.shared_data.vulnnbr = db_stats.get('hosts_with_vulns', 0)
+                    except Exception as e:
+                        logger.debug(f"DB stats read failed: {e}")
+                elif os.path.exists(self.shared_data.livestatusfile):
+                    # Fallback: read from CSV
                     with open(self.shared_data.livestatusfile, 'r') as file:
                         reader = csv.DictReader(file)
                         for row in reader:
