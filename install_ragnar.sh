@@ -619,13 +619,18 @@ setup_ragnar() {
         check_success "Created ragnar user"
     fi
 
-    # Check for existing ragnar directory
+    # Check for existing ragnar directory with a valid git clone
     cd /home/$ragnar_USER
-    if [ -d "Ragnar" ]; then
+    if [ -d "Ragnar/.git" ]; then
         log "INFO" "Using existing ragnar directory"
         echo -e "${GREEN}Using existing ragnar directory${NC}"
     else
-        # No existing directory, proceed with clone
+        # Remove empty/invalid directory if it exists
+        if [ -d "Ragnar" ]; then
+            log "WARNING" "Ragnar directory exists but is not a valid git clone, removing..."
+            rm -rf Ragnar
+        fi
+        # Proceed with clone
         log "INFO" "Cloning ragnar repository"
         git clone https://github.com/PierreGode/Ragnar.git
         check_success "Cloned ragnar repository"
