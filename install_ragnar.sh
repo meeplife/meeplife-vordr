@@ -1309,11 +1309,13 @@ BANNER
     echo ""
     if [ "$is_pi" = true ]; then
         echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Raspberry Pi with e-Paper display              ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install (headless, no e-Paper)           ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} WiFi Pineapple Pager ${RED}(WIP)                    ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install with e-Paper display             ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} Server install (headless, no e-Paper)           ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 4)${CYAN} WiFi Pineapple Pager ${RED}(WIP)                    ${NC}"
     else
-        echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Server install (headless, no e-Paper)           ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} WiFi Pineapple Pager                            ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Server install with e-Paper display             ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install (headless, no e-Paper)           ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} WiFi Pineapple Pager                            ${NC}"
     fi
     echo ""
     echo -e "${CYAN}  ══════════════════════════════════════════════════════════${NC}"
@@ -1359,14 +1361,23 @@ main() {
                     ;;
                 2)
                     SERVER_INSTALL=true
+                    HEADLESS_MODE=false
+                    HEADLESS_VARIANT=""
+                    HEADLESS_VARIANT_LABEL="Server install with e-Paper"
+                    RAGNAR_ENTRYPOINT="Ragnar.py"
+                    log "INFO" "Server install with e-Paper selected on Raspberry Pi hardware"
+                    break
+                    ;;
+                3)
+                    SERVER_INSTALL=true
                     HEADLESS_MODE=true
                     HEADLESS_VARIANT="server"
                     HEADLESS_VARIANT_LABEL="Server install"
                     RAGNAR_ENTRYPOINT="headlessRagnar.py"
-                    log "INFO" "Server install selected on Raspberry Pi hardware"
+                    log "INFO" "Server install (headless) selected on Raspberry Pi hardware"
                     break
                     ;;
-                3)
+                4)
                     log "INFO" "WiFi Pineapple Pager installation selected"
                     echo ""
                     echo -e "${BLUE}   This will package and deploy Ragnar to your Pineapple Pager.${NC}"
@@ -1390,7 +1401,7 @@ main() {
                     clean_exit $pager_exit_code
                     ;;
                 *)
-                    echo -e "\n   ${RED}Invalid option. Please select 1, 2, or 3.${NC}"
+                    echo -e "\n   ${RED}Invalid option. Please select 1, 2, 3, or 4.${NC}"
                     sleep 1
                     ;;
             esac
@@ -1398,14 +1409,23 @@ main() {
             case $profile_choice in
                 1)
                     SERVER_INSTALL=true
+                    HEADLESS_MODE=false
+                    HEADLESS_VARIANT=""
+                    HEADLESS_VARIANT_LABEL="Server install with e-Paper"
+                    RAGNAR_ENTRYPOINT="Ragnar.py"
+                    log "INFO" "Server install with e-Paper selected"
+                    break
+                    ;;
+                2)
+                    SERVER_INSTALL=true
                     HEADLESS_MODE=true
                     HEADLESS_VARIANT="server"
                     HEADLESS_VARIANT_LABEL="Server install"
                     RAGNAR_ENTRYPOINT="headlessRagnar.py"
-                    log "INFO" "Server install profile selected"
+                    log "INFO" "Server install (headless) profile selected"
                     break
                     ;;
-                2)
+                3)
                     log "INFO" "WiFi Pineapple Pager installation selected"
                     echo ""
                     echo -e "${BLUE}   This will package and deploy Ragnar to your Pineapple Pager.${NC}"
@@ -1425,7 +1445,7 @@ main() {
                     clean_exit $pager_exit_code
                     ;;
                 *)
-                    echo -e "\n   ${RED}Invalid option. Please select 1 or 2.${NC}"
+                    echo -e "\n   ${RED}Invalid option. Please select 1, 2, or 3.${NC}"
                     sleep 1
                     ;;
             esac
