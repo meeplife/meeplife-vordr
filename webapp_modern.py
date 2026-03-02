@@ -2926,6 +2926,12 @@ def update_config():
         ai_reload_error = None
         epd_type_changed = 'epd_type' in data
 
+        # Resolve size keys (from web UI) to actual driver names
+        if epd_type_changed:
+            from shared import resolve_epd_type
+            raw_epd = data['epd_type']
+            data['epd_type'] = resolve_epd_type(raw_epd, shared_data.config.get('epd_type'))
+
         # Update configuration (allow new keys to be added)
         for key, value in data.items():
             # Skip private/internal keys that start with __
@@ -2975,12 +2981,24 @@ def update_config():
         
         # Emit update to all connected clients
         socketio.emit('config_updated', shared_data.config)
-        
+
         response = {'success': True, 'message': 'Configuration updated'}
         if ai_reload_success is not None:
             response['ai_reload_success'] = ai_reload_success
             if ai_reload_error:
                 response['ai_reload_error'] = ai_reload_error
+
+        # EPD type change requires a full service restart to reinitialize hardware
+        if epd_type_changed:
+            response['restart_required'] = True
+            response['message'] = 'Display type changed - restarting Ragnar service...'
+            import threading
+            def _delayed_restart():
+                import time, os, signal
+                time.sleep(2)  # Give the response time to reach the client
+                logger.info(f"Restarting Ragnar service for EPD type change to: {shared_data.config.get('epd_type')}")
+                os.system('systemctl restart ragnar.service')
+            threading.Thread(target=_delayed_restart, daemon=True).start()
 
         return jsonify(response)
     except Exception as e:
@@ -11294,6 +11312,7 @@ def get_traffic_analyzer():
         try:
             from traffic_analyzer import TrafficAnalyzer
             _traffic_analyzer_instance = TrafficAnalyzer(shared_data)
+            shared_data._traffic_analyzer = _traffic_analyzer_instance
         except ImportError:
             return None
     return _traffic_analyzer_instance
@@ -11539,6 +11558,7 @@ def get_advanced_vuln_scanner():
         try:
             from advanced_vuln_scanner import AdvancedVulnScanner
             _advanced_vuln_scanner_instance = AdvancedVulnScanner(shared_data)
+            shared_data._advanced_vuln_scanner = _advanced_vuln_scanner_instance
         except ImportError:
             return None
     return _advanced_vuln_scanner_instance

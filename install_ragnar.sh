@@ -14,6 +14,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
 NC='\033[0m'
 
 # Logging configuration
@@ -651,6 +653,24 @@ setup_ragnar() {
         sed -i "s/\"epd_type\": \"epd2in13_V4\"/\"epd_type\": \"$EPD_VERSION\"/" "$ragnar_PATH/shared.py"
         check_success "Updated shared.py default EPD configuration to $EPD_VERSION"
         log "INFO" "Modified: $ragnar_PATH/shared.py"
+
+        # Also update shared_config.json if it exists (from previous install)
+        local config_json="$ragnar_PATH/config/shared_config.json"
+        if [ -f "$config_json" ]; then
+            python3 -c "
+import json, sys
+try:
+    with open('$config_json', 'r') as f:
+        cfg = json.load(f)
+    cfg['epd_type'] = '$EPD_VERSION'
+    with open('$config_json', 'w') as f:
+        json.dump(cfg, f, indent=4)
+    print('SUCCESS: Updated shared_config.json epd_type to $EPD_VERSION')
+except Exception as e:
+    print(f'WARNING: Could not update shared_config.json: {e}')
+"
+            log "INFO" "Updated config JSON: $config_json -> epd_type=$EPD_VERSION"
+        fi
     else
         log "WARNING" "shared.py not found at $ragnar_PATH/shared.py - skipping E-Paper configuration update"
     fi
@@ -1280,6 +1300,48 @@ clean_exit() {
     exit $exit_code
 }
 
+# Display the installation menu with banner
+show_install_menu() {
+    local is_pi=$1
+    clear
+    echo ""
+    echo -e "${GREEN}"
+    cat << 'BANNER'
+    ____
+   |  _ \ __ _  __ _ _ __   __ _ _ __
+   | |_) / _` |/ _` | '_ \ / _` | '__|
+   |  _ < (_| | (_| | | | | (_| | |
+   |_| \_\__,_|\__, |_| |_|\__,_|_|
+                |___/
+BANNER
+    echo -e "${NC}"
+    echo -e "${CYAN}  ══════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}     Network Security & Pentesting Toolkit                ${NC}"
+    echo -e "${GREEN}     Created by Pierre Gode                               ${NC}"
+    echo -e "${CYAN}  ──────────────────────────────────────────────────────────${NC}"
+    echo -e "${RED}     For authorized penetration testing only.              ${NC}"
+    echo -e "${RED}     Unauthorized access to networks is illegal.           ${NC}"
+    echo -e "${CYAN}  ══════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "${BLUE}   Select installation profile:${NC}"
+    echo ""
+    if [ "$is_pi" = true ]; then
+        echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Raspberry Pi with e-Paper display              ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install with e-Paper display             ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} Server install (headless, no e-Paper)           ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 4)${CYAN} WiFi Pineapple Pager ${RED}(WIP)                    ${NC}"
+    else
+        echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Server install with e-Paper display             ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install (headless, no e-Paper)           ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} WiFi Pineapple Pager                            ${NC}"
+    fi
+    echo ""
+    echo -e "${CYAN}  ══════════════════════════════════════════════════════════${NC}"
+    echo -e "   Enter your choice or ${RED}ctrl+c${NC} to exit."
+    echo ""
+    echo -ne "   ${YELLOW}> ${NC}"
+}
+
 # Main installation process
 main() {
     log "INFO" "Starting ragnar installation..."
@@ -1298,97 +1360,115 @@ main() {
         is_pi=true
     fi
 
-    if [ "$is_pi" = true ]; then
-        echo -e "${BLUE}Installation profile:${NC}"
-        echo "1. Install on Raspberry Pi with e-Paper"
-        echo "2. Server install (headless, auto-detect packages, no e-Paper)"
-        echo "3. Install on WiFi Pineapple Pager - not working WIP"
-        read -p "Choose an option (1/2/3): " profile_choice
+    # Display menu and handle selection (loops on invalid input)
+    local profile_choice=""
+    while true; do
+        show_install_menu "$is_pi"
+        read -r profile_choice
 
-        case $profile_choice in
-            1)
-                SERVER_INSTALL=false
-                HEADLESS_MODE=false
-                HEADLESS_VARIANT=""
-                HEADLESS_VARIANT_LABEL=""
-                RAGNAR_ENTRYPOINT="Ragnar.py"
-                ;;
-            2)
-                SERVER_INSTALL=true
-                HEADLESS_MODE=true
-                HEADLESS_VARIANT="server"
-                HEADLESS_VARIANT_LABEL="Server install"
-                RAGNAR_ENTRYPOINT="headlessRagnar.py"
-                log "INFO" "Server install selected on Raspberry Pi hardware"
-                ;;
-            3)
-                log "INFO" "WiFi Pineapple Pager installation selected"
-                echo ""
-                echo -e "${BLUE}This will package and deploy Ragnar to your Pineapple Pager.${NC}"
-                echo -e "${YELLOW}Make sure your Pager is connected and accessible via SSH.${NC}"
-                echo ""
-                read -p "Enter Pager IP address [172.16.42.1]: " pager_ip
-                pager_ip="${pager_ip:-172.16.42.1}"
+        if [ "$is_pi" = true ]; then
+            case $profile_choice in
+                1)
+                    SERVER_INSTALL=false
+                    HEADLESS_MODE=false
+                    HEADLESS_VARIANT=""
+                    HEADLESS_VARIANT_LABEL=""
+                    RAGNAR_ENTRYPOINT="Ragnar.py"
+                    log "INFO" "Raspberry Pi with e-Paper installation selected"
+                    break
+                    ;;
+                2)
+                    SERVER_INSTALL=true
+                    HEADLESS_MODE=false
+                    HEADLESS_VARIANT=""
+                    HEADLESS_VARIANT_LABEL="Server install with e-Paper"
+                    RAGNAR_ENTRYPOINT="Ragnar.py"
+                    log "INFO" "Server install with e-Paper selected on Raspberry Pi hardware"
+                    break
+                    ;;
+                3)
+                    SERVER_INSTALL=true
+                    HEADLESS_MODE=true
+                    HEADLESS_VARIANT="server"
+                    HEADLESS_VARIANT_LABEL="Server install"
+                    RAGNAR_ENTRYPOINT="headlessRagnar.py"
+                    log "INFO" "Server install (headless) selected on Raspberry Pi hardware"
+                    break
+                    ;;
+                4)
+                    log "INFO" "WiFi Pineapple Pager installation selected"
+                    echo ""
+                    echo -e "${BLUE}   This will package and deploy Ragnar to your Pineapple Pager.${NC}"
+                    echo -e "${YELLOW}   Make sure your Pager is connected and accessible via SSH.${NC}"
+                    echo ""
+                    read -p "   Enter Pager IP address [172.16.42.1]: " pager_ip
+                    pager_ip="${pager_ip:-172.16.42.1}"
 
-                pager_exit_code=0
-                if [ -f "$ragnar_PATH/scripts/install_pineapple_pager.sh" ]; then
-                    chmod +x "$ragnar_PATH/scripts/install_pineapple_pager.sh"
-                    bash "$ragnar_PATH/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
-                elif [ -f "$(dirname "$0")/scripts/install_pineapple_pager.sh" ]; then
-                    chmod +x "$(dirname "$0")/scripts/install_pineapple_pager.sh"
-                    bash "$(dirname "$0")/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
-                else
-                    log "ERROR" "install_pineapple_pager.sh not found"
-                    log "INFO" "Run it directly: ./scripts/install_pineapple_pager.sh $pager_ip"
-                    pager_exit_code=1
-                fi
-                clean_exit $pager_exit_code
-                ;;
-            *)
-                log "ERROR" "Invalid option selected"
-                clean_exit 1
-                ;;
-        esac
-    else
-        echo -e "${BLUE}Installation profile:${NC}"
-        echo "1. Server install (headless, auto-detect packages, no e-Paper)"
-        echo "2. Install on WiFi Pineapple Pager"
-        read -p "Choose an option (1/2): " profile_choice
+                    pager_exit_code=0
+                    if [ -f "$ragnar_PATH/scripts/install_pineapple_pager.sh" ]; then
+                        chmod +x "$ragnar_PATH/scripts/install_pineapple_pager.sh"
+                        bash "$ragnar_PATH/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
+                    elif [ -f "$(dirname "$0")/scripts/install_pineapple_pager.sh" ]; then
+                        chmod +x "$(dirname "$0")/scripts/install_pineapple_pager.sh"
+                        bash "$(dirname "$0")/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
+                    else
+                        log "ERROR" "install_pineapple_pager.sh not found"
+                        log "INFO" "Run it directly: ./scripts/install_pineapple_pager.sh $pager_ip"
+                        pager_exit_code=1
+                    fi
+                    clean_exit $pager_exit_code
+                    ;;
+                *)
+                    echo -e "\n   ${RED}Invalid option. Please select 1, 2, 3, or 4.${NC}"
+                    sleep 1
+                    ;;
+            esac
+        else
+            case $profile_choice in
+                1)
+                    SERVER_INSTALL=true
+                    HEADLESS_MODE=false
+                    HEADLESS_VARIANT=""
+                    HEADLESS_VARIANT_LABEL="Server install with e-Paper"
+                    RAGNAR_ENTRYPOINT="Ragnar.py"
+                    log "INFO" "Server install with e-Paper selected"
+                    break
+                    ;;
+                2)
+                    SERVER_INSTALL=true
+                    HEADLESS_MODE=true
+                    HEADLESS_VARIANT="server"
+                    HEADLESS_VARIANT_LABEL="Server install"
+                    RAGNAR_ENTRYPOINT="headlessRagnar.py"
+                    log "INFO" "Server install (headless) profile selected"
+                    break
+                    ;;
+                3)
+                    log "INFO" "WiFi Pineapple Pager installation selected"
+                    echo ""
+                    echo -e "${BLUE}   This will package and deploy Ragnar to your Pineapple Pager.${NC}"
+                    echo -e "${YELLOW}   Make sure your Pager is connected and accessible via SSH.${NC}"
+                    echo ""
+                    read -p "   Enter Pager IP address [172.16.42.1]: " pager_ip
+                    pager_ip="${pager_ip:-172.16.42.1}"
 
-        case $profile_choice in
-            1)
-                SERVER_INSTALL=true
-                HEADLESS_MODE=true
-                HEADLESS_VARIANT="server"
-                HEADLESS_VARIANT_LABEL="Server install"
-                RAGNAR_ENTRYPOINT="headlessRagnar.py"
-                log "INFO" "Server install profile selected"
-                ;;
-            2)
-                log "INFO" "WiFi Pineapple Pager installation selected"
-                echo ""
-                echo -e "${BLUE}This will package and deploy Ragnar to your Pineapple Pager.${NC}"
-                echo -e "${YELLOW}Make sure your Pager is connected and accessible via SSH.${NC}"
-                echo ""
-                read -p "Enter Pager IP address [172.16.42.1]: " pager_ip
-                pager_ip="${pager_ip:-172.16.42.1}"
-
-                pager_exit_code=0
-                if [ -f "$(dirname "$0")/scripts/install_pineapple_pager.sh" ]; then
-                    chmod +x "$(dirname "$0")/scripts/install_pineapple_pager.sh"
-                    bash "$(dirname "$0")/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
-                else
-                    log "ERROR" "install_pineapple_pager.sh not found"
-                    pager_exit_code=1
-                fi
-                clean_exit $pager_exit_code
-                ;;
-            *)
-                log "ERROR" "Invalid option selected"
-                clean_exit 1
-                ;;
-        esac
-    fi
+                    pager_exit_code=0
+                    if [ -f "$(dirname "$0")/scripts/install_pineapple_pager.sh" ]; then
+                        chmod +x "$(dirname "$0")/scripts/install_pineapple_pager.sh"
+                        bash "$(dirname "$0")/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
+                    else
+                        log "ERROR" "install_pineapple_pager.sh not found"
+                        pager_exit_code=1
+                    fi
+                    clean_exit $pager_exit_code
+                    ;;
+                *)
+                    echo -e "\n   ${RED}Invalid option. Please select 1, 2, or 3.${NC}"
+                    sleep 1
+                    ;;
+            esac
+        fi
+    done
 
     # Only attempt e-paper setup when not in server/headless profile
     if [ "$HEADLESS_MODE" != true ]; then
@@ -1419,7 +1499,7 @@ main() {
             log "INFO" "Attempting to auto-detect E-Paper display"
             
             EPD_VERSION=""
-            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
+            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7_V2" "epd2in7" "epd2in13" "epd2in9_V2" "epd3in7")
             
             for version in "${EPD_VERSIONS[@]}"; do
                 echo -e "${BLUE}Testing ${version}...${NC}"
@@ -1488,27 +1568,33 @@ except:
         
         if [ -z "$EPD_VERSION" ]; then
             echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
-            echo "1. epd2in13"
-            echo "2. epd2in13_V2"
-            echo "3. epd2in13_V3"
-            echo "4. epd2in13_V4"
-            echo "5. epd2in7"
-            echo "6. No e-Paper (headless install)"
-            
+            echo "1. epd2in13     (2.13\" 122x250)"
+            echo "2. epd2in13_V2  (2.13\" V2 122x250)"
+            echo "3. epd2in13_V3  (2.13\" V3 122x250)"
+            echo "4. epd2in13_V4  (2.13\" V4 122x250)"
+            echo "5. epd2in7_V2   (2.7\"  V2 176x264)"
+            echo "6. epd2in7      (2.7\"  V1 176x264)"
+            echo "7. epd2in9_V2   (2.9\"  128x296)"
+            echo "8. epd3in7      (3.7\"  280x480)"
+            echo "9. No e-Paper (headless install)"
+
             while true; do
-                read -p "Enter your choice (1-6): " epd_choice
+                read -p "Enter your choice (1-9): " epd_choice
                 case $epd_choice in
                     1) EPD_VERSION="epd2in13"; break;;
                     2) EPD_VERSION="epd2in13_V2"; break;;
                     3) EPD_VERSION="epd2in13_V3"; break;;
                     4) EPD_VERSION="epd2in13_V4"; break;;
-                    5) EPD_VERSION="epd2in7"; break;;
-                    6)
+                    5) EPD_VERSION="epd2in7_V2"; break;;
+                    6) EPD_VERSION="epd2in7"; break;;
+                    7) EPD_VERSION="epd2in9_V2"; break;;
+                    8) EPD_VERSION="epd3in7"; break;;
+                    9)
                         select_headless_variant
                         EPD_VERSION=""
                         break
                         ;;
-                    *) echo -e "${RED}Invalid choice. Please select 1-6.${NC}";;
+                    *) echo -e "${RED}Invalid choice. Please select 1-9.${NC}";;
                 esac
             done
 

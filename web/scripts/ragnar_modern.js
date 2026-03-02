@@ -319,12 +319,23 @@ function getConfigLabel(key) {
     return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
+// Map installed driver names to display size keys for the dropdown
+function epdTypeToSizeKey(epd_type) {
+    if (!epd_type || epd_type === 'auto') return 'auto';
+    if (epd_type.startsWith('epd2in13')) return '2in13';
+    if (epd_type.startsWith('epd2in7')) return '2in7';
+    if (epd_type.startsWith('epd2in9')) return '2in9';
+    if (epd_type.startsWith('epd3in7')) return '3in7';
+    return epd_type; // fallback: return as-is
+}
+
 const displaySelectOptions = {
     epd_type: [
-        { value: 'epd2in13_V4', label: 'Waveshare 2.13" V4 (122x250)' },
-        { value: 'epd2in13_V3', label: 'Waveshare 2.13" V3 (122x250)' },
-        { value: 'epd2in13_V2', label: 'Waveshare 2.13" V2 (122x250)' },
-        { value: 'epd2in7', label: 'Waveshare 2.7" (176x264)' }
+        { value: 'auto', label: 'Auto-detect' },
+        { value: '2in13', label: '2.13" e-Paper (122x250)' },
+        { value: '2in7', label: '2.7" e-Paper (176x264)' },
+        { value: '2in9', label: '2.9" e-Paper (128x296)' },
+        { value: '3in7', label: '3.7" e-Paper (280x480)' }
     ],
     screen_reversed: [
         { value: 'false', label: 'Normal orientation' },
@@ -8981,7 +8992,11 @@ function displayConfigForm(config) {
                 const description = escapeHtml(getConfigDescription(key));
                 
                 if (Array.isArray(selectOptions)) {
-                    const selectedValue = typeof value === 'boolean' ? String(value) : (value ?? '');
+                    let selectedValue = typeof value === 'boolean' ? String(value) : (value ?? '');
+                    // For epd_type, map driver name to size key so the dropdown matches
+                    if (key === 'epd_type') {
+                        selectedValue = epdTypeToSizeKey(selectedValue);
+                    }
                     html += `
                         <div class="space-y-2">
                             <label class="flex items-center gap-2 text-sm text-gray-400">

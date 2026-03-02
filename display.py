@@ -30,6 +30,13 @@ import subprocess
 
 logger = Logger(name="display.py", level=logging.DEBUG)
 
+# Import button listener (only functional on Pi with GPIO)
+try:
+    from epd_button import EPDButtonListener, PAGE_MAIN, PAGE_NETWORK, PAGE_VULN, PAGE_DISCOVERED, PAGE_ADVANCED, PAGE_TRAFFIC
+except ImportError:
+    EPDButtonListener = None
+    PAGE_MAIN, PAGE_NETWORK, PAGE_VULN, PAGE_DISCOVERED, PAGE_ADVANCED, PAGE_TRAFFIC = 0, 1, 2, 3, 4, 5
+
 class Display:
     def __init__(self, shared_data):
         """Initialize the display and start the main image and shared data update threads."""
@@ -42,13 +49,9 @@ class Display:
         self.web_screen_reversed = self.shared_data.web_screen_reversed
         self.main_image = None  # Initialize main_image variable
 
-        # Define frise positions for different display types
+        # Frise position (x=0 since frise is resized to full display width)
         self.frise_positions = {
-            "epd2in7": {
-                "x": 50,
-                "y": 160
-            },
-            "default": {  # Default position for other display types
+            "default": {
                 "x": 0,
                 "y": 160
             }
@@ -76,6 +79,17 @@ class Display:
 
         self.scale_factor_x = self.shared_data.scale_factor_x
         self.scale_factor_y = self.shared_data.scale_factor_y
+
+        # Layout stretch for wider displays (e.g. 2.7" 176x264)
+        # On 2.13" (122x250) this is 1.0 - no change
+        # On 2.7" (176x264) push status/comment section down further
+        self.y_stretch = 1.35 if self.scale_factor_x > 1.2 else 1.0
+
+        # Hardware button support (2.7" HAT has KEY1-KEY4)
+        self.button_listener = None
+        if self.scale_factor_x > 1.2 and EPDButtonListener is not None:
+            self.button_listener = EPDButtonListener(shared_data)
+            self.button_listener.start()
 
     def get_frise_position(self):
         """Get the frise position based on the display type."""
@@ -683,6 +697,451 @@ class Display:
             logger.error(f"Error checking USB connection status: {e}")
             return False
 
+    def _sleep_interruptible(self, current_page):
+        """Sleep for screen_delay but wake early if button changes the page."""
+        if not self.button_listener:
+            time.sleep(self.shared_data.screen_delay)
+            return
+        # Check every 0.1s if page changed, otherwise do full sleep
+        steps = max(1, int(self.shared_data.screen_delay / 0.1))
+        for _ in range(steps):
+            if self.button_listener.current_page != current_page:
+                return  # Page changed, skip remaining sleep
+            time.sleep(0.1)
+
+    def _get_cached_page_data(self, key, fetch_fn, ttl=10):
+        """Get cached page data, refreshing if older than ttl seconds."""
+        if not hasattr(self, '_page_cache'):
+            self._page_cache = {}
+        now = time.time()
+        cached = self._page_cache.get(key)
+        if cached and (now - cached[0]) < ttl:
+            return cached[1]
+        try:
+            data = fetch_fn()
+        except Exception as e:
+            logger.debug(f"Page data fetch error ({key}): {e}")
+            data = cached[1] if cached else None
+        self._page_cache[key] = (now, data)
+        return data
+
+    def _draw_page_frame(self, draw, title):
+        """Draw standard page frame: border, title, divider, footer."""
+        w = self.shared_data.width
+        h = self.shared_data.height
+        font = self.shared_data.font_arial9
+        font_title = self.shared_data.font_viking
+        draw.rectangle((1, 1, w - 1, h - 1), outline=0)
+        draw.text((4, 4), title, font=font_title, fill=0)
+        draw.line((1, 22, w - 1, 22), fill=0)
+        draw.line((1, h - 18, w - 1, h - 18), fill=0)
+        draw.text((4, h - 16), "K1:Home K2:Flip K3:Next K4:Rst", font=font, fill=0)
+
+    def _draw_stat_rows(self, draw, y, stats):
+        """Draw key-value stat rows. Returns final y position."""
+        w = self.shared_data.width
+        font = self.shared_data.font_arial9
+        line_h = 14
+        for label, value in stats:
+            val_str = str(value)[:22]
+            draw.text((6, y), label, font=font, fill=0)
+            draw.text((w - 6 - font.getlength(val_str), y), val_str, font=font, fill=0)
+            y += line_h
+        return y
+
+    def _fetch_network_data(self):
+        """Fetch real host data from database."""
+        sd = self.shared_data
+        try:
+            hosts = sd.db.get_all_hosts()
+            alive = [h for h in hosts if h.get('status') == 'alive']
+            total_ports = 0
+            for h in hosts:
+                ports_str = h.get('ports', '')
+                if ports_str:
+                    total_ports += len([p for p in str(ports_str).split(';') if p.strip()])
+            return {
+                'total': len(hosts),
+                'alive': len(alive),
+                'ports': total_ports,
+                'hosts': hosts[:8],
+            }
+        except Exception as e:
+            logger.debug(f"DB host fetch error: {e}")
+            return None
+
+    def _fetch_vuln_intel_data(self):
+        """Fetch real vulnerability intelligence from scan files."""
+        sd = self.shared_data
+        vuln_dir = getattr(sd, 'vulnerabilities_dir', None)
+        if not vuln_dir or not os.path.exists(vuln_dir):
+            return None
+        scans = 0
+        hosts_set = set()
+        services = 0
+        scripts = 0
+        recent_targets = []
+        try:
+            for fname in os.listdir(vuln_dir):
+                fpath = os.path.join(vuln_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                if fname.endswith('_vuln_scan.txt'):
+                    scans += 1
+                    ip = fname.split('_')[0] if '_' in fname else fname
+                    hosts_set.add(ip)
+                    if len(recent_targets) < 5:
+                        recent_targets.append(ip)
+                    try:
+                        with open(fpath, 'r', errors='ignore') as f:
+                            content = f.read()
+                        for line in content.split('\n'):
+                            if '/tcp' in line or '/udp' in line:
+                                services += 1
+                            if '|' in line and '_' in line:
+                                scripts += 1
+                    except Exception:
+                        pass
+                elif fname.startswith('lynis_') and fname.endswith('_pentest.txt'):
+                    scans += 1
+                    parts = fname.replace('lynis_', '').replace('_pentest.txt', '')
+                    hosts_set.add(parts)
+        except Exception as e:
+            logger.debug(f"Vuln intel scan error: {e}")
+        return {
+            'scans': scans,
+            'hosts': len(hosts_set),
+            'services': services,
+            'scripts': scripts,
+            'targets': recent_targets,
+        }
+
+    def _count_cred_file(self, filepath):
+        """Count credential entries in a CSV file."""
+        try:
+            if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+                return 0
+            with open(filepath, 'r') as f:
+                reader = csv.reader(f)
+                next(reader, None)  # skip header
+                return sum(1 for row in reader if row)
+        except Exception:
+            return 0
+
+    def _fetch_discovered_data(self):
+        """Fetch real credentials, loot, and attack data."""
+        sd = self.shared_data
+        creds = {}
+        for svc, attr in [('SSH', 'sshfile'), ('SMB', 'smbfile'), ('FTP', 'ftpfile'),
+                          ('Telnet', 'telnetfile'), ('RDP', 'rdpfile'), ('SQL', 'sqlfile')]:
+            filepath = getattr(sd, attr, '')
+            creds[svc] = self._count_cred_file(filepath) if filepath else 0
+        total_creds = sum(creds.values())
+        loot_count = 0
+        try:
+            if os.path.exists(sd.datastolendir):
+                for _, _, files in os.walk(sd.datastolendir):
+                    loot_count += len([f for f in files if not f.endswith('.log')])
+        except Exception:
+            pass
+        attack_count = 0
+        try:
+            attacks_dir = os.path.join(sd.logsdir, 'attacks')
+            if os.path.exists(attacks_dir):
+                import json as json_mod
+                for fname in os.listdir(attacks_dir):
+                    if fname.endswith('.json'):
+                        try:
+                            with open(os.path.join(attacks_dir, fname), 'r') as f:
+                                data = json_mod.load(f)
+                            if isinstance(data, list):
+                                attack_count += len(data)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return {
+            'creds': creds,
+            'total_creds': total_creds,
+            'loot': loot_count,
+            'attacks': attack_count,
+            'zombies': getattr(sd, 'zombiesnbr', 0),
+        }
+
+    def _fetch_advanced_data(self):
+        """Fetch real advanced vulnerability scanner data."""
+        scanner = getattr(self.shared_data, '_advanced_vuln_scanner', None)
+        if not scanner:
+            return None
+        try:
+            available = scanner.get_available_scanners()
+            summary = scanner.get_summary()
+            active = scanner.get_active_scans_list()
+            return {
+                'scanners': available,
+                'summary': summary,
+                'active_scans': active,
+            }
+        except Exception as e:
+            logger.debug(f"Advanced scanner data error: {e}")
+            return None
+
+    def _fetch_traffic_data(self):
+        """Fetch real traffic analyzer data."""
+        analyzer = getattr(self.shared_data, '_traffic_analyzer', None)
+        if not analyzer:
+            return None
+        try:
+            summary = analyzer.get_summary()
+            return summary
+        except Exception as e:
+            logger.debug(f"Traffic analyzer data error: {e}")
+            return None
+
+    def _render_network_page(self, image, draw):
+        """Render Page 2: Network Scanner - real host data from database."""
+        self._draw_page_frame(draw, "NETWORK SCAN")
+        w = self.shared_data.width
+        h = self.shared_data.height
+        font = self.shared_data.font_arial9
+        sd = self.shared_data
+        y = 28
+        line_h = 14
+
+        data = self._get_cached_page_data('network', self._fetch_network_data)
+
+        if data:
+            stats = [
+                ("Hosts alive", f"{data['alive']}/{data['total']}"),
+                ("Open ports", str(data['ports'])),
+                ("Credentials", str(getattr(sd, 'crednbr', 0))),
+                ("Status", str(getattr(sd, 'ragnarorch_status', 'IDLE'))),
+            ]
+            y = self._draw_stat_rows(draw, y, stats)
+
+            # Divider before host list
+            y += 2
+            draw.line((4, y, w - 4, y), fill=0)
+            y += 4
+
+            # List actual discovered hosts
+            hosts = data.get('hosts', [])
+            max_rows = (h - 18 - y) // 12
+            for host in hosts[:max_rows]:
+                ip = host.get('ip', '?')
+                status = host.get('status', '?')
+                ports = host.get('ports', '')
+                port_count = len([p for p in str(ports).split(';') if p.strip()]) if ports else 0
+                line = f"{ip}"
+                extra = f"{status[:3]} p:{port_count}"
+                draw.text((6, y), line, font=font, fill=0)
+                draw.text((w - 6 - font.getlength(extra), y), extra, font=font, fill=0)
+                y += 12
+        else:
+            stats = [
+                ("Hosts found", str(getattr(sd, 'targetnbr', 0))),
+                ("Open ports", str(getattr(sd, 'portnbr', 0))),
+                ("Credentials", str(getattr(sd, 'crednbr', 0))),
+                ("Network KB", str(getattr(sd, 'networkkbnbr', 0))),
+                ("Status", str(getattr(sd, 'ragnarorch_status', 'IDLE'))),
+            ]
+            self._draw_stat_rows(draw, y, stats)
+
+    def _render_vuln_page(self, image, draw):
+        """Render Page 3: Vulnerability Scanner - real scan intel from files."""
+        self._draw_page_frame(draw, "VULN INTEL")
+        w = self.shared_data.width
+        h = self.shared_data.height
+        font = self.shared_data.font_arial9
+        sd = self.shared_data
+        y = 28
+        line_h = 14
+
+        data = self._get_cached_page_data('vuln_intel', self._fetch_vuln_intel_data, ttl=30)
+
+        if data:
+            stats = [
+                ("Vulns found", str(getattr(sd, 'vulnnbr', 0))),
+                ("Scan reports", str(data['scans'])),
+                ("Hosts scanned", str(data['hosts'])),
+                ("Services", str(data['services'])),
+                ("Script outputs", str(data['scripts'])),
+            ]
+            y = self._draw_stat_rows(draw, y, stats)
+
+            # Show recent scan targets
+            targets = data.get('targets', [])
+            if targets:
+                y += 2
+                draw.line((4, y, w - 4, y), fill=0)
+                y += 4
+                draw.text((6, y), "Recent targets:", font=font, fill=0)
+                y += 12
+                max_rows = (h - 18 - y) // 12
+                for ip in targets[:max_rows]:
+                    draw.text((10, y), ip, font=font, fill=0)
+                    y += 12
+        else:
+            stats = [
+                ("Vulns found", str(getattr(sd, 'vulnnbr', 0))),
+                ("Attacks avail", str(getattr(sd, 'attacksnbr', 0))),
+                ("Hosts scanned", str(getattr(sd, 'targetnbr', 0))),
+                ("No scan files", ""),
+            ]
+            self._draw_stat_rows(draw, y, stats)
+
+    def _render_discovered_page(self, image, draw):
+        """Render Page 4: Discovered - real credentials, loot, and attack data."""
+        self._draw_page_frame(draw, "DISCOVERED")
+        w = self.shared_data.width
+        h = self.shared_data.height
+        font = self.shared_data.font_arial9
+        y = 28
+
+        data = self._get_cached_page_data('discovered', self._fetch_discovered_data, ttl=15)
+
+        if data:
+            creds = data['creds']
+            stats = [
+                ("SSH creds", str(creds.get('SSH', 0))),
+                ("SMB creds", str(creds.get('SMB', 0))),
+                ("FTP creds", str(creds.get('FTP', 0))),
+                ("Telnet", str(creds.get('Telnet', 0))),
+                ("RDP creds", str(creds.get('RDP', 0))),
+                ("SQL creds", str(creds.get('SQL', 0))),
+            ]
+            y = self._draw_stat_rows(draw, y, stats)
+            y += 2
+            draw.line((4, y, w - 4, y), fill=0)
+            y += 4
+            summary = [
+                ("Data stolen", f"{data['loot']} files"),
+                ("Attack logs", str(data['attacks'])),
+                ("Zombies", str(data['zombies'])),
+            ]
+            self._draw_stat_rows(draw, y, summary)
+        else:
+            stats = [
+                ("Credentials", str(getattr(self.shared_data, 'crednbr', 0))),
+                ("Data files", str(getattr(self.shared_data, 'datanbr', 0))),
+                ("Zombies", str(getattr(self.shared_data, 'zombiesnbr', 0))),
+            ]
+            self._draw_stat_rows(draw, y, stats)
+
+    def _render_advanced_page(self, image, draw):
+        """Render Page 5: Advanced Vuln Scanner - real scanner status and findings."""
+        self._draw_page_frame(draw, "ADV SCANNER")
+        w = self.shared_data.width
+        h = self.shared_data.height
+        font = self.shared_data.font_arial9
+        y = 28
+
+        data = self._get_cached_page_data('advanced', self._fetch_advanced_data, ttl=5)
+
+        if data:
+            scanners = data.get('scanners', {})
+            summary = data.get('summary', {})
+            active = data.get('active_scans', [])
+            sev = summary.get('severity_counts', {})
+
+            # Scanner availability
+            scanner_items = []
+            for name in ['nuclei', 'nikto', 'zap']:
+                if name == 'zap':
+                    running = scanners.get('zap_running', False)
+                    status = "Running" if running else ("Ready" if scanners.get(name) else "N/A")
+                else:
+                    status = "Ready" if scanners.get(name) else "N/A"
+                scanner_items.append((name.capitalize(), status))
+
+            for label, value in scanner_items:
+                draw.text((6, y), label, font=font, fill=0)
+                draw.text((w - 6 - font.getlength(value), y), value, font=font, fill=0)
+                y += 14
+
+            y += 2
+            draw.line((4, y, w - 4, y), fill=0)
+            y += 4
+
+            # Findings summary
+            total = summary.get('total_findings', 0)
+            draw.text((6, y), "Findings", font=font, fill=0)
+            draw.text((w - 6 - font.getlength(str(total)), y), str(total), font=font, fill=0)
+            y += 14
+
+            # Severity breakdown on one line each
+            crit = sev.get('critical', 0)
+            high = sev.get('high', 0)
+            med = sev.get('medium', 0)
+            low = sev.get('low', 0)
+            sev_line = f"C:{crit} H:{high} M:{med} L:{low}"
+            draw.text((6, y), sev_line, font=font, fill=0)
+            y += 14
+
+            # Active scans
+            active_count = len([s for s in active if s.get('status') == 'running'])
+            draw.text((6, y), "Active scans", font=font, fill=0)
+            draw.text((w - 6 - font.getlength(str(active_count)), y), str(active_count), font=font, fill=0)
+            y += 14
+
+            # Show running scan details
+            for scan in active:
+                if scan.get('status') == 'running' and y < h - 32:
+                    stype = scan.get('scan_type', '?')[:8]
+                    progress = scan.get('progress_percent', 0)
+                    line = f"{stype} {progress}%"
+                    draw.text((10, y), line, font=font, fill=0)
+                    y += 12
+        else:
+            stats = [
+                ("Scanner", "Not available"),
+                ("Vulns found", str(getattr(self.shared_data, 'vulnnbr', 0))),
+                ("Status", str(getattr(self.shared_data, 'ragnarstatustext', 'IDLE'))),
+            ]
+            self._draw_stat_rows(draw, y, stats)
+
+    def _render_traffic_page(self, image, draw):
+        """Render Page 6: Traffic Analysis - real capture data."""
+        self._draw_page_frame(draw, "TRAFFIC")
+        w = self.shared_data.width
+        h = self.shared_data.height
+        font = self.shared_data.font_arial9
+        y = 28
+
+        data = self._get_cached_page_data('traffic', self._fetch_traffic_data, ttl=3)
+
+        if data:
+            status = data.get('status', 'stopped')
+            pkts_sec = data.get('packets_per_second', 0)
+            throughput = data.get('throughput_mbps', 0)
+            total_pkts = data.get('total_packets', 0)
+            total_bytes_h = data.get('total_bytes_human', '0 B')
+            unique_hosts = data.get('unique_hosts', 0)
+            connections = data.get('active_connections', 0)
+            alerts = data.get('total_alerts', 0)
+            dns = data.get('dns_queries_captured', 0)
+
+            status_str = status.upper()
+            stats = [
+                ("Capture", status_str),
+                ("Pkts/sec", f"{pkts_sec:.1f}"),
+                ("Throughput", f"{throughput:.2f} Mbps"),
+                ("Total pkts", str(total_pkts)),
+                ("Total data", str(total_bytes_h)),
+                ("Hosts seen", str(unique_hosts)),
+                ("Connections", str(connections)),
+                ("Alerts", str(alerts)),
+                ("DNS queries", str(dns)),
+            ]
+            self._draw_stat_rows(draw, y, stats)
+        else:
+            stats = [
+                ("Traffic", "Not available"),
+                ("WiFi", "On" if self.shared_data.wifi_connected else "Off"),
+                ("Status", str(getattr(self.shared_data, 'ragnarorch_status', 'IDLE'))),
+            ]
+            self._draw_stat_rows(draw, y, stats)
+
     def run(self):
         """Main loop for updating the EPD display with shared data."""
         self.manual_mode_txt = ""
@@ -696,6 +1155,41 @@ class Display:
                 image = Image.new('1', (self.shared_data.width, self.shared_data.height))
                 draw = ImageDraw.Draw(image)
                 draw.rectangle((0, 0, self.shared_data.width, self.shared_data.height), fill=255)
+
+                # Check if button listener wants a different page
+                current_page = PAGE_MAIN
+                if self.button_listener and self.button_listener.available:
+                    current_page = self.button_listener.current_page
+
+                if current_page == PAGE_NETWORK:
+                    self._render_network_page(image, draw)
+                elif current_page == PAGE_VULN:
+                    self._render_vuln_page(image, draw)
+                elif current_page == PAGE_DISCOVERED:
+                    self._render_discovered_page(image, draw)
+                elif current_page == PAGE_ADVANCED:
+                    self._render_advanced_page(image, draw)
+                elif current_page == PAGE_TRAFFIC:
+                    self._render_traffic_page(image, draw)
+                else:
+                    pass  # Fall through to main page rendering below
+
+                if current_page != PAGE_MAIN:
+                    # Non-main pages are fully rendered above, skip to display
+                    if self.screen_reversed:
+                        image = image.transpose(Image.Transpose.ROTATE_180)
+                    self.epd_helper.display_partial(image)
+                    self.epd_helper.display_partial(image)
+                    if self.web_screen_reversed:
+                        image = image.transpose(Image.Transpose.ROTATE_180)
+                    with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
+                        image.save(img_file)
+                        img_file.flush()
+                        os.fsync(img_file.fileno())
+                    self._sleep_interruptible(current_page)
+                    continue
+
+                # === PAGE_MAIN: Default Ragnar display ===
                 # Check PiSugar once per frame for title sizing + battery text
                 _pisugar_available = False
                 try:
@@ -742,17 +1236,22 @@ class Display:
                     except Exception:
                         pass
 
+                # ys stretches the status/comment section down on wider displays
+                # Stats rows stay at normal scale, only dividers and status below get stretched
+                ys = self.y_stretch
+                sx = self.scale_factor_x
+                sy = self.scale_factor_y
                 stats = [
-                    (self.shared_data.target, (int(8 * self.scale_factor_x), int(22 * self.scale_factor_y)), (int(28 * self.scale_factor_x), int(22 * self.scale_factor_y)), str(self.shared_data.targetnbr)),
-                    (self.shared_data.port, (int(47 * self.scale_factor_x), int(22 * self.scale_factor_y)), (int(67 * self.scale_factor_x), int(22 * self.scale_factor_y)), str(self.shared_data.portnbr)),
-                    (self.shared_data.vuln, (int(86 * self.scale_factor_x), int(22 * self.scale_factor_y)), (int(106 * self.scale_factor_x), int(22 * self.scale_factor_y)), str(self.shared_data.vulnnbr)),
-                    (self.shared_data.cred, (int(8 * self.scale_factor_x), int(41 * self.scale_factor_y)), (int(28 * self.scale_factor_x), int(41 * self.scale_factor_y)), str(self.shared_data.crednbr)),
-                    (self.shared_data.money, (int(3 * self.scale_factor_x), int(172 * self.scale_factor_y)), (int(3 * self.scale_factor_x), int(192 * self.scale_factor_y)), str(self.shared_data.coinnbr)),
-                    (self.shared_data.level, (int(2 * self.scale_factor_x), int(217 * self.scale_factor_y)), (int(4 * self.scale_factor_x), int(237 * self.scale_factor_y)), str(self.shared_data.levelnbr)),
-                    (self.shared_data.zombie, (int(47 * self.scale_factor_x), int(41 * self.scale_factor_y)), (int(67 * self.scale_factor_x), int(41 * self.scale_factor_y)), str(self.shared_data.zombiesnbr)),
-                    (self.shared_data.networkkb, (int(102 * self.scale_factor_x), int(190 * self.scale_factor_y)), (int(102 * self.scale_factor_x), int(208 * self.scale_factor_y)), str(self.shared_data.networkkbnbr)),
-                    (self.shared_data.data, (int(86 * self.scale_factor_x), int(41 * self.scale_factor_y)), (int(106 * self.scale_factor_x), int(41 * self.scale_factor_y)), str(self.shared_data.datanbr)),
-                    (self.shared_data.attacks, (int(100 * self.scale_factor_x), int(218 * self.scale_factor_y)), (int(102 * self.scale_factor_x), int(237 * self.scale_factor_y)), str(self.shared_data.attacksnbr)),
+                    (self.shared_data.target, (int(8 * sx), int(22 * sy)), (int(28 * sx), int(22 * sy)), str(self.shared_data.targetnbr)),
+                    (self.shared_data.port, (int(47 * sx), int(22 * sy)), (int(67 * sx), int(22 * sy)), str(self.shared_data.portnbr)),
+                    (self.shared_data.vuln, (int(86 * sx), int(22 * sy)), (int(106 * sx), int(22 * sy)), str(self.shared_data.vulnnbr)),
+                    (self.shared_data.cred, (int(8 * sx), int(41 * sy)), (int(28 * sx), int(41 * sy)), str(self.shared_data.crednbr)),
+                    (self.shared_data.money, (int(3 * sx), int(172 * sy)), (int(3 * sx), int(192 * sy)), str(self.shared_data.coinnbr)),
+                    (self.shared_data.level, (int(2 * sx), int(217 * sy)), (int(4 * sx), int(237 * sy)), str(self.shared_data.levelnbr)),
+                    (self.shared_data.zombie, (int(47 * sx), int(41 * sy)), (int(67 * sx), int(41 * sy)), str(self.shared_data.zombiesnbr)),
+                    (self.shared_data.networkkb, (int(102 * sx), int(190 * sy)), (int(102 * sx), int(208 * sy)), str(self.shared_data.networkkbnbr)),
+                    (self.shared_data.data, (int(86 * sx), int(41 * sy)), (int(106 * sx), int(41 * sy)), str(self.shared_data.datanbr)),
+                    (self.shared_data.attacks, (int(100 * sx), int(218 * sy)), (int(102 * sx), int(237 * sy)), str(self.shared_data.attacksnbr)),
                 ]
 
                 for img, img_pos, text_pos, text in stats:
@@ -760,21 +1259,22 @@ class Display:
                     draw.text(text_pos, text, font=self.shared_data.font_arial9, fill=0)
 
                 self.shared_data.update_ragnarstatus()
-                image.paste(self.shared_data.ragnarstatusimage, (int(3 * self.scale_factor_x), int(60 * self.scale_factor_y)))
-                draw.text((int(35 * self.scale_factor_x), int(65 * self.scale_factor_y)), self.shared_data.ragnarstatustext, font=self.shared_data.font_arial9, fill=0)
-                draw.text((int(35 * self.scale_factor_x), int(75 * self.scale_factor_y)), self.shared_data.ragnarstatustext2, font=self.shared_data.font_arial9, fill=0)
+                image.paste(self.shared_data.ragnarstatusimage, (int(3 * sx), int(60 * sy * ys)))
+                draw.text((int(35 * sx), int(65 * sy * ys)), self.shared_data.ragnarstatustext, font=self.shared_data.font_arial9, fill=0)
+                draw.text((int(35 * sx), int(75 * sy * ys)), self.shared_data.ragnarstatustext2, font=self.shared_data.font_arial9, fill=0)
 
-                # Get frise position based on display type
-                frise_x, frise_y = self.get_frise_position()
-                image.paste(self.shared_data.frise, (frise_x, frise_y))
+                # Frise ribbon - hide on wide displays to save vertical space
+                if ys == 1.0:
+                    frise_x, frise_y = self.get_frise_position()
+                    image.paste(self.shared_data.frise, (frise_x, frise_y))
 
                 draw.rectangle((1, 1, self.shared_data.width - 1, self.shared_data.height - 1), outline=0)
-                draw.line((1, 20, self.shared_data.width - 1, 20), fill=0)
-                draw.line((1, 59, self.shared_data.width - 1, 59), fill=0)
-                draw.line((1, 87, self.shared_data.width - 1, 87), fill=0)
+                draw.line((1, int(20 * sy), self.shared_data.width - 1, int(20 * sy)), fill=0)
+                draw.line((1, int(59 * sy * ys), self.shared_data.width - 1, int(59 * sy * ys)), fill=0)
+                draw.line((1, int(87 * sy * ys), self.shared_data.width - 1, int(87 * sy * ys)), fill=0)
 
                 lines = self.shared_data.wrap_text(self.shared_data.ragnarsays, self.shared_data.font_arialbold, self.shared_data.width - 4)
-                y_text = int(90 * self.scale_factor_y)
+                y_text = int(90 * sy * ys)
 
                 if self.main_image is not None:
                     image.paste(self.main_image, (self.shared_data.x_center1, self.shared_data.y_bottom1))
@@ -797,8 +1297,8 @@ class Display:
                     image.save(img_file)
                     img_file.flush()
                     os.fsync(img_file.fileno())
-                
-                time.sleep(self.shared_data.screen_delay)
+
+                self._sleep_interruptible(PAGE_MAIN)
             except Exception as e:
                 logger.error(f"An error occurred: {e}")
 

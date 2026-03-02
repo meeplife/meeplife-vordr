@@ -53,11 +53,46 @@ except ImportError:
     NetworkContextRegistry = None
 
 DEFAULT_EPD_TYPE = "epd2in13_V4"
+DESIGN_REF_WIDTH = 122   # All layout coordinates are designed for this width
+DESIGN_REF_HEIGHT = 250  # All layout coordinates are designed for this height
+
+# Map web UI size keys to default driver names
+SIZE_KEY_TO_DEFAULT_DRIVER = {
+    "2in13": "epd2in13_V4",
+    "2in7":  "epd2in7_V2",
+    "2in9":  "epd2in9_V2",
+    "3in7":  "epd3in7",
+}
+
+def resolve_epd_type(size_key, current_epd_type=None):
+    """Resolve a web UI size key to the correct driver name.
+
+    If the current driver is already the same size family (e.g. epd2in13_V3 for 2in13),
+    keep it. Otherwise, switch to the default driver for the new size.
+    """
+    if size_key == "auto" or size_key in DISPLAY_PROFILES:
+        return size_key  # Already a valid driver name or auto
+
+    default_driver = SIZE_KEY_TO_DEFAULT_DRIVER.get(size_key)
+    if not default_driver:
+        return size_key  # Unknown key, return as-is
+
+    # If current driver is the same size family AND is a known valid profile, keep it
+    if current_epd_type and current_epd_type.startswith(f"epd{size_key}"):
+        if current_epd_type in DISPLAY_PROFILES:
+            return current_epd_type
+
+    return default_driver
+
 DISPLAY_PROFILES = {
-    "epd2in7": {"ref_width": 176, "ref_height": 264, "default_flip": False},
-    "epd2in13_V2": {"ref_width": 122, "ref_height": 250, "default_flip": False},
-    "epd2in13_V3": {"ref_width": 122, "ref_height": 250, "default_flip": True},
-    "epd2in13_V4": {"ref_width": 122, "ref_height": 250, "default_flip": False},
+    "epd2in13":    {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    "epd2in7":     {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    "epd2in7_V2":  {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    "epd2in9_V2":  {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    "epd3in7":     {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    "epd2in13_V2": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    "epd2in13_V3": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": True},
+    "epd2in13_V4": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
 }
 
 
@@ -721,18 +756,71 @@ class SharedData:
             logger.info("Initializing EPD display...")
             time.sleep(1)
             epd_type = self.config.get("epd_type", DEFAULT_EPD_TYPE)
+
+            # Auto-detect if set to "auto" OR if still on factory default (user never ran installer with detection)
+            needs_detect = epd_type == "auto"
+            if not needs_detect:
+                # Also auto-detect if the configured driver doesn't exist or can't load
+                try:
+                    EPDHelper(epd_type)
+                except Exception:
+                    logger.warning(f"Configured EPD driver '{epd_type}' failed to load, switching to auto-detect")
+                    needs_detect = True
+
+            if needs_detect:
+                logger.info("EPD auto-detection running...")
+                result = EPDHelper.auto_detect()
+                if result:
+                    epd_type = result[0]
+                    logger.info(f"Auto-detected EPD: {epd_type} ({result[1]}x{result[2]})")
+                    self.config['epd_type'] = epd_type
+                    self.save_config()
+                else:
+                    logger.warning("Auto-detection found no display, using default")
+                    epd_type = DEFAULT_EPD_TYPE
+
             self.epd_helper = EPDHelper(epd_type)
             self.apply_display_profile(epd_type)
             self.screen_reversed = bool(self.config.get("screen_reversed", False))
             self.web_screen_reversed = self.screen_reversed
-            logger.info(f"EPD type: {epd_type} | flipped: {self.screen_reversed}")
+            logger.info(f"EPD type: {epd_type} | size: {self.epd_helper.epd.width}x{self.epd_helper.epd.height} | flipped: {self.screen_reversed}")
             self.epd_helper.init_full_update()
             self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
+
+            # Validate the driver works by doing a test getbuffer with a blank image
+            try:
+                test_img = Image.new('1', (self.width, self.height), 255)
+                test_buf = self.epd_helper.epd.getbuffer(test_img)
+                expected_size = int(self.width / 8) * self.height
+                if len(test_buf) < expected_size:
+                    raise ValueError(f"Buffer size mismatch: got {len(test_buf)}, expected {expected_size}")
+            except Exception as ve:
+                logger.warning(f"EPD driver '{epd_type}' buffer validation failed: {ve}, trying auto-detect...")
+                raise  # Fall through to the auto-detect fallback below
+
             logger.info(f"EPD {self.config['epd_type']} initialized with size: {self.width}x{self.height}")
         except Exception as e:
             logger.error(f"Error initializing EPD display: {e}")
+            # Try auto-detection as fallback before giving up
+            logger.info("Attempting auto-detection as fallback...")
+            try:
+                result = EPDHelper.auto_detect()
+                if result:
+                    epd_type = result[0]
+                    logger.info(f"Fallback auto-detected EPD: {epd_type} ({result[1]}x{result[2]})")
+                    self.config['epd_type'] = epd_type
+                    self.apply_display_profile(epd_type)
+                    self.epd_helper = EPDHelper(epd_type)
+                    self.epd_helper.init_full_update()
+                    self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
+                    self.screen_reversed = bool(self.config.get("screen_reversed", False))
+                    self.web_screen_reversed = self.screen_reversed
+                    self.save_config()
+                    logger.info(f"EPD {epd_type} initialized via fallback with size: {self.width}x{self.height}")
+                    return
+            except Exception as e2:
+                logger.error(f"Fallback auto-detection also failed: {e2}")
             logger.warning("Continuing without EPD display support")
-            # Set default values and continue without EPD
             self.epd_helper = None
             fallback_profile = DISPLAY_PROFILES.get(DEFAULT_EPD_TYPE, {"ref_width": 122, "ref_height": 250, "default_flip": False})
             epd_type = self.config.get('epd_type') or DEFAULT_EPD_TYPE
@@ -776,7 +864,7 @@ class SharedData:
         self.ragnarstatustext2 = "Awakening..."
         self.scale_factor_x = self.width / self.config['ref_width']
         self.scale_factor_y = self.height / self.config['ref_height']
-        self.text_frame_top = int(88 * self.scale_factor_x)
+        self.text_frame_top = int(88 * self.scale_factor_y)
         self.text_frame_bottom = int(159 * self.scale_factor_y)
         self.y_text = self.text_frame_top + 2
         self.targetnbr = 0
@@ -1121,18 +1209,30 @@ class SharedData:
             logger.error(f"Unexpected error in save_config: {e}")
 
     def load_fonts(self):
-        """Load the fonts."""
+        """Load the fonts, scaled for the current display size."""
         if ImageFont is None:
             logger.info("PIL not available - skipping font loading (Pager uses file paths)")
             return
         try:
             logger.info("Loading fonts...")
-            self.font_arial14 = self.load_font('Arial.ttf', 14)
-            self.font_arial11 = self.load_font('Arial.ttf', 11)
-            self.font_arial9 = self.load_font('Arial.ttf', 9)
-            self.font_arialbold = self.load_font('Arial.ttf', 12)
-            self.font_viking = self.load_font('Viking.TTF', 13)
-            self.font_viking_sm = self.load_font('Viking.TTF', 10)
+            sf = getattr(self, 'scale_factor_y', 1.0)
+            sx = getattr(self, 'scale_factor_x', 1.0)
+            is_wide = sx > 1.2  # Display is significantly wider than 2.13" (e.g. 2.7")
+
+            self.font_arial14 = self.load_font('Arial.ttf', max(9, int(14 * sf)))
+            self.font_arial11 = self.load_font('Arial.ttf', max(8, int(11 * sf)))
+            self.font_arial9 = self.load_font('Arial.ttf', max(7, int(9 * sf)))
+            self.font_arialbold = self.load_font('Arial.ttf', max(9, int(12 * sf)))
+
+            # Viking title font: keep same size on wider displays (no reduction needed)
+            if is_wide:
+                viking_size = max(10, int(13 * sf))
+                viking_sm_size = max(8, int(10 * sf))
+            else:
+                viking_size = max(10, int(13 * sf))
+                viking_sm_size = max(8, int(10 * sf))
+            self.font_viking = self.load_font('Viking.TTF', viking_size)
+            self.font_viking_sm = self.load_font('Viking.TTF', viking_sm_size)
 
         except Exception as e:
             logger.error(f"Error loading fonts: {e}")
@@ -1148,34 +1248,44 @@ class SharedData:
             logger.error(f"Error loading font {font_name}: {e}")
             raise
 
+    def _get_image_scale(self):
+        """Get the image scale factor for the current display. Returns 1.0 for default 2.13" displays."""
+        sf = getattr(self, 'scale_factor_x', 1.0)
+        return sf if sf > 1.05 else 1.0  # Only scale if display is meaningfully larger
+
     def load_images(self):
-        """Load the images for the e-paper display."""
+        """Load the images for the e-paper display, scaled for display size."""
         try:
             logger.info("Loading images...")
+            img_scale = self._get_image_scale()
 
             # Load static images from the root of staticpicdir
             self.ragnarstatusimage = None
-            self.ragnar1 = self.load_image(os.path.join(self.staticpicdir, 'ragnar1.bmp')) # Used to calculate the center of the screen
-            self.port = self.load_image(os.path.join(self.staticpicdir, 'port.bmp'))
+            self.ragnar1 = self.load_image(os.path.join(self.staticpicdir, 'ragnar1.bmp'), scale=img_scale)
+            self.port = self.load_image(os.path.join(self.staticpicdir, 'port.bmp'), scale=img_scale)
             self.frise = self.load_image(os.path.join(self.staticpicdir, 'frise.bmp'))
-            self.target = self.load_image(os.path.join(self.staticpicdir, 'target.bmp'))
-            self.vuln = self.load_image(os.path.join(self.staticpicdir, 'vuln.bmp'))
-            self.connected = self.load_image(os.path.join(self.staticpicdir, 'connected.bmp'))
-            self.bluetooth = self.load_image(os.path.join(self.staticpicdir, 'bluetooth.bmp'))
-            self.wifi = self.load_image(os.path.join(self.staticpicdir, 'wifi.bmp'))
-            self.ethernet = self.load_image(os.path.join(self.staticpicdir, 'ethernet.bmp'))
-            self.usb = self.load_image(os.path.join(self.staticpicdir, 'usb.bmp'))
-            self.level = self.load_image(os.path.join(self.staticpicdir, 'level.bmp'))
-            self.cred = self.load_image(os.path.join(self.staticpicdir, 'cred.bmp'))
-            self.attack = self.load_image(os.path.join(self.staticpicdir, 'attack.bmp'))
-            self.attacks = self.load_image(os.path.join(self.staticpicdir, 'attacks.bmp'))
-            self.gold = self.load_image(os.path.join(self.staticpicdir, 'gold.bmp'))
-            self.networkkb = self.load_image(os.path.join(self.staticpicdir, 'networkkb.bmp'))
-            self.zombie = self.load_image(os.path.join(self.staticpicdir, 'zombie.bmp'))
-            self.data = self.load_image(os.path.join(self.staticpicdir, 'data.bmp'))
-            self.money = self.load_image(os.path.join(self.staticpicdir, 'money.bmp'))
-            self.zombie_status = self.load_image(os.path.join(self.staticpicdir, 'zombie.bmp'))
-            self.attack = self.load_image(os.path.join(self.staticpicdir, 'attack.bmp'))
+            self.target = self.load_image(os.path.join(self.staticpicdir, 'target.bmp'), scale=img_scale)
+            self.vuln = self.load_image(os.path.join(self.staticpicdir, 'vuln.bmp'), scale=img_scale)
+            self.connected = self.load_image(os.path.join(self.staticpicdir, 'connected.bmp'), scale=img_scale)
+            self.bluetooth = self.load_image(os.path.join(self.staticpicdir, 'bluetooth.bmp'), scale=img_scale)
+            self.wifi = self.load_image(os.path.join(self.staticpicdir, 'wifi.bmp'), scale=img_scale)
+            self.ethernet = self.load_image(os.path.join(self.staticpicdir, 'ethernet.bmp'), scale=img_scale)
+            self.usb = self.load_image(os.path.join(self.staticpicdir, 'usb.bmp'), scale=img_scale)
+            self.level = self.load_image(os.path.join(self.staticpicdir, 'level.bmp'), scale=img_scale)
+            self.cred = self.load_image(os.path.join(self.staticpicdir, 'cred.bmp'), scale=img_scale)
+            self.attack = self.load_image(os.path.join(self.staticpicdir, 'attack.bmp'), scale=img_scale)
+            self.attacks = self.load_image(os.path.join(self.staticpicdir, 'attacks.bmp'), scale=img_scale)
+            self.gold = self.load_image(os.path.join(self.staticpicdir, 'gold.bmp'), scale=img_scale)
+            self.networkkb = self.load_image(os.path.join(self.staticpicdir, 'networkkb.bmp'), scale=img_scale)
+            self.zombie = self.load_image(os.path.join(self.staticpicdir, 'zombie.bmp'), scale=img_scale)
+            self.data = self.load_image(os.path.join(self.staticpicdir, 'data.bmp'), scale=img_scale)
+            self.money = self.load_image(os.path.join(self.staticpicdir, 'money.bmp'), scale=img_scale)
+            self.zombie_status = self.load_image(os.path.join(self.staticpicdir, 'zombie.bmp'), scale=img_scale)
+            self.attack = self.load_image(os.path.join(self.staticpicdir, 'attack.bmp'), scale=img_scale)
+
+            # Resize frise to span full display width
+            if self.frise is not None and hasattr(self, 'width') and self.frise.width < self.width:
+                self.frise = self.frise.resize((self.width - 2, self.frise.height), Image.NEAREST)
 
             """ Load the images for the different actions status"""
             # Dynamically load status images based on actions.json
@@ -1187,7 +1297,7 @@ class SharedData:
                         if b_class:
                             indiv_status_path = os.path.join(self.statuspicdir, b_class)
                             image_path = os.path.join(indiv_status_path, f'{b_class}.bmp')
-                            image = self.load_image(image_path)
+                            image = self.load_image(image_path, scale=img_scale)
                             setattr(self, b_class, image)
                             logger.info(f"Loaded image for {b_class} from {image_path}")
             except Exception as e:
@@ -1205,7 +1315,7 @@ class SharedData:
 
                 for image_name in os.listdir(status_dir):
                     if image_name.endswith('.bmp') and re.search(r'\d', image_name):
-                        image = self.load_image(os.path.join(status_dir, image_name))
+                        image = self.load_image(os.path.join(status_dir, image_name), scale=img_scale)
                         if image:
                             self.image_series[status].append(image)
 
@@ -1242,15 +1352,20 @@ class SharedData:
         self.ragnarstatustext = self.ragnarorch_status  # Mettre à jour le texte du statut
 
 
-    def load_image(self, image_path):
-        """Load an image."""
+    def load_image(self, image_path, scale=None):
+        """Load an image, optionally resizing it by the given scale factor."""
         if Image is None:
             return None
         try:
             if not os.path.exists(image_path):
                 logger.warning(f"Warning: {image_path} does not exist.")
                 return None
-            return Image.open(image_path)
+            img = Image.open(image_path)
+            if scale is not None and scale != 1.0 and scale > 1.05:
+                new_w = max(1, int(img.width * scale))
+                new_h = max(1, int(img.height * scale))
+                img = img.resize((new_w, new_h), Image.NEAREST)
+            return img
         except Exception as e:
             logger.error(f"Error loading image {image_path}: {e}")
             raise
