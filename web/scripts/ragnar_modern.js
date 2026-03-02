@@ -321,10 +321,14 @@ function getConfigLabel(key) {
 
 const displaySelectOptions = {
     epd_type: [
+        { value: 'auto', label: 'Auto-detect' },
         { value: 'epd2in13_V4', label: 'Waveshare 2.13" V4 (122x250)' },
         { value: 'epd2in13_V3', label: 'Waveshare 2.13" V3 (122x250)' },
         { value: 'epd2in13_V2', label: 'Waveshare 2.13" V2 (122x250)' },
-        { value: 'epd2in7', label: 'Waveshare 2.7" (176x264)' }
+        { value: 'epd2in13', label: 'Waveshare 2.13" V1 (122x250)' },
+        { value: 'epd2in7', label: 'Waveshare 2.7" (176x264)' },
+        { value: 'epd2in9_V2', label: 'Waveshare 2.9" V2 (128x296)' },
+        { value: 'epd3in7', label: 'Waveshare 3.7" (280x480)' }
     ],
     screen_reversed: [
         { value: 'false', label: 'Normal orientation' },

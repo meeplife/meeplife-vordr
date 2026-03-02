@@ -42,13 +42,9 @@ class Display:
         self.web_screen_reversed = self.shared_data.web_screen_reversed
         self.main_image = None  # Initialize main_image variable
 
-        # Define frise positions for different display types
+        # Frise position (x=0 since frise is resized to full display width)
         self.frise_positions = {
-            "epd2in7": {
-                "x": 50,
-                "y": 160
-            },
-            "default": {  # Default position for other display types
+            "default": {
                 "x": 0,
                 "y": 160
             }
@@ -769,9 +765,9 @@ class Display:
                 image.paste(self.shared_data.frise, (frise_x, frise_y))
 
                 draw.rectangle((1, 1, self.shared_data.width - 1, self.shared_data.height - 1), outline=0)
-                draw.line((1, 20, self.shared_data.width - 1, 20), fill=0)
-                draw.line((1, 59, self.shared_data.width - 1, 59), fill=0)
-                draw.line((1, 87, self.shared_data.width - 1, 87), fill=0)
+                draw.line((1, int(20 * self.scale_factor_y), self.shared_data.width - 1, int(20 * self.scale_factor_y)), fill=0)
+                draw.line((1, int(59 * self.scale_factor_y), self.shared_data.width - 1, int(59 * self.scale_factor_y)), fill=0)
+                draw.line((1, int(87 * self.scale_factor_y), self.shared_data.width - 1, int(87 * self.scale_factor_y)), fill=0)
 
                 lines = self.shared_data.wrap_text(self.shared_data.ragnarsays, self.shared_data.font_arialbold, self.shared_data.width - 4)
                 y_text = int(90 * self.scale_factor_y)

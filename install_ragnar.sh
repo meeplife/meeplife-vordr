@@ -1481,7 +1481,7 @@ main() {
             log "INFO" "Attempting to auto-detect E-Paper display"
             
             EPD_VERSION=""
-            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13")
+            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7" "epd2in13" "epd2in9_V2" "epd3in7")
             
             for version in "${EPD_VERSIONS[@]}"; do
                 echo -e "${BLUE}Testing ${version}...${NC}"
@@ -1550,27 +1550,31 @@ except:
         
         if [ -z "$EPD_VERSION" ]; then
             echo -e "\n${BLUE}Please select your E-Paper Display version:${NC}"
-            echo "1. epd2in13"
-            echo "2. epd2in13_V2"
-            echo "3. epd2in13_V3"
-            echo "4. epd2in13_V4"
-            echo "5. epd2in7"
-            echo "6. No e-Paper (headless install)"
-            
+            echo "1. epd2in13     (2.13\" 122x250)"
+            echo "2. epd2in13_V2  (2.13\" V2 122x250)"
+            echo "3. epd2in13_V3  (2.13\" V3 122x250)"
+            echo "4. epd2in13_V4  (2.13\" V4 122x250)"
+            echo "5. epd2in7      (2.7\"  176x264)"
+            echo "6. epd2in9_V2   (2.9\"  128x296)"
+            echo "7. epd3in7      (3.7\"  280x480)"
+            echo "8. No e-Paper (headless install)"
+
             while true; do
-                read -p "Enter your choice (1-6): " epd_choice
+                read -p "Enter your choice (1-8): " epd_choice
                 case $epd_choice in
                     1) EPD_VERSION="epd2in13"; break;;
                     2) EPD_VERSION="epd2in13_V2"; break;;
                     3) EPD_VERSION="epd2in13_V3"; break;;
                     4) EPD_VERSION="epd2in13_V4"; break;;
                     5) EPD_VERSION="epd2in7"; break;;
-                    6)
+                    6) EPD_VERSION="epd2in9_V2"; break;;
+                    7) EPD_VERSION="epd3in7"; break;;
+                    8)
                         select_headless_variant
                         EPD_VERSION=""
                         break
                         ;;
-                    *) echo -e "${RED}Invalid choice. Please select 1-6.${NC}";;
+                    *) echo -e "${RED}Invalid choice. Please select 1-8.${NC}";;
                 esac
             done
 

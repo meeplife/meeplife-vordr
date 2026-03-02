@@ -2,8 +2,20 @@
 
 import importlib
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+
+# Known EPD types to try during auto-detection (most common first)
+KNOWN_EPD_TYPES = [
+    "epd2in13_V4",
+    "epd2in13_V3",
+    "epd2in13_V2",
+    "epd2in7",
+    "epd2in13",
+    "epd2in9_V2",
+    "epd3in7",
+]
 
 class EPDHelper:
     def __init__(self, epd_type):
@@ -52,6 +64,8 @@ class EPDHelper:
         try:
             if hasattr(self.epd, 'displayPartial'):
                 self.epd.displayPartial(self.epd.getbuffer(image))
+            elif hasattr(self.epd, 'display_Partial'):
+                self.epd.display_Partial(self.epd.getbuffer(image))
             else:
                 self.epd.display(self.epd.getbuffer(image))
             logger.info("Partial display update complete.")
@@ -84,3 +98,36 @@ class EPDHelper:
         except Exception as e:
             logger.error(f"Error putting EPD to sleep: {e}")
             raise
+
+    @staticmethod
+    def auto_detect(known_types=None):
+        """Try each known EPD driver and return the first that initializes successfully.
+
+        Returns:
+            tuple: (epd_type_string, width, height) on success, or None if no display detected.
+        """
+        if known_types is None:
+            known_types = KNOWN_EPD_TYPES
+
+        for epd_type in known_types:
+            try:
+                logger.info(f"Auto-detect: trying {epd_type}...")
+                helper = EPDHelper(epd_type)
+                helper.epd.init()
+                w, h = helper.epd.width, helper.epd.height
+                try:
+                    helper.epd.sleep()
+                except Exception:
+                    pass
+                time.sleep(0.3)
+                logger.info(f"Auto-detect: found {epd_type} ({w}x{h})")
+                return (epd_type, w, h)
+            except Exception as e:
+                logger.debug(f"Auto-detect: {epd_type} failed: {e}")
+                try:
+                    helper.epd.sleep()
+                except Exception:
+                    pass
+                time.sleep(0.3)
+        logger.warning("Auto-detect: no e-paper display detected")
+        return None
