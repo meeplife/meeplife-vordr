@@ -14901,7 +14901,7 @@ function renderNetworkMap(nodes, links) {
         .attr('text-anchor', 'middle')
         .attr('fill', '#94a3b8')
         .attr('font-size', '10px')
-        .text(d => d.isCenter ? 'Ragnar' : (d.ip || d.label));
+        .text(d => d.isCenter ? 'Ragnar' : (d.label || d.ip));
 
     // Force simulation
     _mapSimulation = d3.forceSimulation(nodes)
