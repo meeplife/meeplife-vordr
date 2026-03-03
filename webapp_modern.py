@@ -10752,6 +10752,76 @@ def list_files_api():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/files/preview')
+def preview_file_api():
+    """Preview file contents inline — text, CSV, images"""
+    import mimetypes, base64
+    try:
+        file_path = request.args.get('path')
+        if not file_path:
+            return jsonify({'error': 'File path required'}), 400
+
+        # Map virtual path to actual path (same logic as download_file_api)
+        actual_path = ''
+        if file_path.startswith('/data_stolen'):
+            actual_path = shared_data.datastolendir + file_path[12:]
+        elif file_path.startswith('/scan_results'):
+            actual_path = shared_data.scan_results_dir + file_path[13:]
+        elif file_path.startswith('/crackedpwd'):
+            actual_path = shared_data.crackedpwddir + file_path[11:]
+        elif file_path.startswith('/vulnerabilities'):
+            actual_path = shared_data.vulnerabilities_dir + file_path[16:]
+        elif file_path.startswith('/logs'):
+            actual_path = shared_data.datadir + '/logs' + file_path[5:]
+        elif file_path.startswith('/backups'):
+            actual_path = shared_data.backupdir + file_path[8:]
+        elif file_path.startswith('/uploads'):
+            actual_path = shared_data.upload_dir + file_path[8:]
+        else:
+            return jsonify({'error': 'Invalid path'}), 400
+
+        if not os.path.isfile(actual_path):
+            return jsonify({'error': 'File not found'}), 404
+
+        # Security: ensure path doesn't escape allowed dirs
+        actual_path = os.path.realpath(actual_path)
+
+        mime_type, _ = mimetypes.guess_type(actual_path)
+        mime_type = mime_type or 'application/octet-stream'
+        file_size = os.path.getsize(actual_path)
+        ext = os.path.splitext(actual_path)[1].lower()
+
+        TEXT_EXTENSIONS = {'.txt', '.log', '.csv', '.json', '.xml', '.yaml', '.yml',
+                           '.md', '.conf', '.cfg', '.ini', '.nmap', '.gnmap', '.sh', '.py'}
+        IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'}
+
+        if ext in IMAGE_EXTENSIONS:
+            if file_size > 5 * 1024 * 1024:  # 5MB limit for images
+                return jsonify({'type': 'too_large', 'size': file_size, 'name': os.path.basename(actual_path)})
+            with open(actual_path, 'rb') as f:
+                data = base64.b64encode(f.read()).decode('ascii')
+            return jsonify({'type': 'image', 'mime': mime_type, 'data': data, 'name': os.path.basename(actual_path)})
+
+        elif ext in TEXT_EXTENSIONS or (mime_type and mime_type.startswith('text/')):
+            if file_size > 512 * 1024:  # 512KB limit for text
+                # Return first 512KB with truncation notice
+                with open(actual_path, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read(512 * 1024)
+                return jsonify({'type': 'text', 'content': content, 'truncated': True,
+                                'size': file_size, 'name': os.path.basename(actual_path)})
+            with open(actual_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+            return jsonify({'type': 'text', 'content': content, 'truncated': False,
+                            'size': file_size, 'name': os.path.basename(actual_path)})
+        else:
+            return jsonify({'type': 'binary', 'mime': mime_type,
+                            'size': file_size, 'name': os.path.basename(actual_path)})
+
+    except Exception as e:
+        logger.error(f"Error previewing file: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/files/download')
 def download_file_api():
     """Download a file"""

@@ -9720,7 +9720,7 @@ function displayFiles(files, path, highlightFile = null) {
         
         html += `
             <div class="flex items-center justify-between p-3 hover:bg-slate-700 rounded-lg transition-colors" data-file-key="${fileKey}">
-                <div class="flex items-center cursor-pointer flex-1" onclick="${file.is_directory ? `loadFiles('${file.path}')` : ''}">
+                <div class="flex items-center cursor-pointer flex-1" onclick="${file.is_directory ? `loadFiles('${file.path}')` : `previewFile('${file.path}')`}">
                     ${icon}
                     <div class="flex-1">
                         <div class="font-medium">${file.name}</div>
@@ -9815,6 +9815,86 @@ function downloadFile(filePath) {
     
     showFileSuccess(`Downloading ${filePath.split('/').pop()}`);
 }
+
+// ── File Preview ────────────────────────────────────────────────
+function previewFile(filePath) {
+    const modal = document.getElementById('file-preview-modal');
+    const content = document.getElementById('preview-content');
+    const filename = document.getElementById('preview-filename');
+    const truncBadge = document.getElementById('preview-truncated-badge');
+    const dlBtn = document.getElementById('preview-download-btn');
+    if (!modal) return;
+
+    const name = filePath.split('/').pop();
+    filename.textContent = name;
+    truncBadge.classList.add('hidden');
+    content.innerHTML = `<div class="text-center text-gray-400 py-12">
+        <svg class="w-8 h-8 inline animate-spin mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+        </svg>
+        <p>Loading preview...</p>
+    </div>`;
+
+    dlBtn.onclick = () => downloadFile(filePath);
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    networkAwareFetch(`/api/files/preview?path=${encodeURIComponent(filePath)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                content.innerHTML = `<p class="text-red-400 p-4">${escapeHtml(data.error)}</p>`;
+                return;
+            }
+            if (data.type === 'image') {
+                content.innerHTML = `<div class="flex items-center justify-center h-full p-4">
+                    <img src="data:${data.mime};base64,${data.data}" alt="${escapeHtml(name)}" class="max-w-full max-h-full object-contain rounded">
+                </div>`;
+            } else if (data.type === 'text') {
+                if (data.truncated) truncBadge.classList.remove('hidden');
+                const isCSV = name.toLowerCase().endsWith('.csv');
+                if (isCSV) {
+                    // Render CSV as table
+                    const lines = data.content.split('\n').filter(l => l.trim());
+                    if (lines.length > 0) {
+                        const headers = lines[0].split(',');
+                        const rows = lines.slice(1);
+                        content.innerHTML = `<div class="overflow-auto"><table class="w-full text-xs border-collapse">
+                            <thead><tr>${headers.map(h => `<th class="border border-slate-600 px-2 py-1 bg-slate-800 text-left">${escapeHtml(h.trim())}</th>`).join('')}</tr></thead>
+                            <tbody>${rows.map(r => `<tr class="hover:bg-slate-800">${r.split(',').map(c => `<td class="border border-slate-700 px-2 py-1 font-mono">${escapeHtml(c.trim())}</td>`).join('')}</tr>`).join('')}</tbody>
+                        </table></div>`;
+                    }
+                } else {
+                    content.innerHTML = `<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-words leading-relaxed">${escapeHtml(data.content)}</pre>`;
+                }
+            } else if (data.type === 'too_large') {
+                content.innerHTML = `<div class="text-center text-gray-400 py-12">
+                    <p class="mb-3">File is too large to preview (${formatBytes(data.size)})</p>
+                    <button onclick="downloadFile('${filePath}')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm">Download Instead</button>
+                </div>`;
+            } else {
+                content.innerHTML = `<div class="text-center text-gray-400 py-12">
+                    <p class="mb-1">Cannot preview this file type (${escapeHtml(data.mime || 'unknown')})</p>
+                    <p class="text-sm mb-3">Size: ${formatBytes(data.size)}</p>
+                    <button onclick="downloadFile('${filePath}')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm">Download</button>
+                </div>`;
+            }
+        })
+        .catch(err => {
+            content.innerHTML = `<p class="text-red-400 p-4">Failed to load preview: ${escapeHtml(err.message)}</p>`;
+        });
+}
+
+function closeFilePreview() {
+    const modal = document.getElementById('file-preview-modal');
+    if (modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); }
+}
+
+// Close preview on backdrop click or Escape key
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeFilePreview(); });
+document.getElementById('file-preview-modal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeFilePreview();
+});
 
 function deleteFile(filePath) {
     if (fileOperationInProgress) return;
