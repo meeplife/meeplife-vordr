@@ -45,6 +45,149 @@ let releaseGateResolver = null;
 let releaseGatePendingPromise = null;
 let threatIntelStatusFilter = 'open';
 
+// ── Credential Table state ──────────────────────────────────────
+let credentialsCache = null;
+let credServiceFilter = 'all';
+let credIPSearch = '';
+let credSortCol = 'ip';
+let credSortAsc = true;
+
+const CRED_SERVICE_PORTS = { ssh: 22, smb: 445, ftp: 21, telnet: 23, rdp: 3389, sql: 3306 };
+const CRED_SERVICE_COLORS = {
+    ssh:    'bg-blue-900 text-blue-300',
+    smb:    'bg-purple-900 text-purple-300',
+    ftp:    'bg-yellow-900 text-yellow-300',
+    telnet: 'bg-orange-900 text-orange-300',
+    rdp:    'bg-pink-900 text-pink-300',
+    sql:    'bg-green-900 text-green-300',
+};
+
+async function loadCredentials(force = false) {
+    if (!force && credentialsCache) { displayCredentials(credentialsCache); return; }
+    try {
+        const data = await fetchAPI('/api/credentials');
+        // Flatten into unified array
+        const flat = [];
+        Object.entries(data).forEach(([svc, entries]) => {
+            (entries || []).forEach(e => flat.push({ ...e, service: svc }));
+        });
+        credentialsCache = flat;
+        displayCredentials(flat);
+    } catch(err) {
+        const tbody = document.getElementById('cred-table-body');
+        if (tbody) tbody.innerHTML =
+            `<tr><td colspan="6" class="py-8 text-center text-red-400">Error loading credentials: ${escapeHtml(err.message)}</td></tr>`;
+    }
+}
+
+function onCredSearch(val) { credIPSearch = val.trim().toLowerCase(); displayCredentials(credentialsCache); }
+
+function filterCredsByService(svc) {
+    credServiceFilter = svc;
+    document.querySelectorAll('.cred-svc-btn').forEach(b => {
+        const active = b.getAttribute('data-svc') === svc;
+        b.classList.toggle('bg-Ragnar-600', active);
+        b.classList.toggle('bg-slate-700', !active);
+        b.classList.toggle('hover:bg-slate-600', !active);
+    });
+    displayCredentials(credentialsCache);
+}
+
+function sortCredsBy(col) {
+    if (credSortCol === col) { credSortAsc = !credSortAsc; } else { credSortCol = col; credSortAsc = true; }
+    ['ip','service','username'].forEach(c => {
+        const el = document.getElementById(`cred-sort-${c}`);
+        if (el) el.textContent = c === credSortCol ? (credSortAsc ? '↑' : '↓') : '';
+    });
+    displayCredentials(credentialsCache);
+}
+
+function displayCredentials(data) {
+    if (!data) return;
+    const tbody = document.getElementById('cred-table-body');
+    const statsEl = document.getElementById('cred-stats');
+    const countEl = document.getElementById('cred-table-count');
+    if (!tbody) return;
+
+    // Build stats
+    const svcCounts = {};
+    data.forEach(c => { svcCounts[c.service] = (svcCounts[c.service] || 0) + 1; });
+    const totalCreds = data.length;
+    let statsHtml = `<div class="bg-slate-800 rounded-lg p-3 text-center"><div class="text-2xl font-bold">${totalCreds}</div><div class="text-xs text-gray-400 mt-1">Total</div></div>`;
+    Object.entries(CRED_SERVICE_PORTS).forEach(([svc]) => {
+        const count = svcCounts[svc] || 0;
+        statsHtml += `<div class="bg-slate-800 rounded-lg p-3 text-center cursor-pointer hover:bg-slate-700 transition-colors" onclick="filterCredsByService('${svc}')">
+            <div class="text-2xl font-bold ${count > 0 ? 'text-green-400' : 'text-gray-500'}">${count}</div>
+            <div class="text-xs text-gray-400 mt-1 uppercase">${svc}</div>
+        </div>`;
+    });
+    if (statsEl) statsEl.innerHTML = statsHtml;
+
+    // Filter
+    let rows = data;
+    if (credServiceFilter !== 'all') rows = rows.filter(r => r.service === credServiceFilter);
+    if (credIPSearch) rows = rows.filter(r => (r.ip || '').toLowerCase().includes(credIPSearch));
+
+    // Sort
+    rows = [...rows].sort((a, b) => {
+        const av = (a[credSortCol] || '').toLowerCase();
+        const bv = (b[credSortCol] || '').toLowerCase();
+        return credSortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    });
+
+    if (rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="py-8 text-center text-gray-400">No credentials match current filters</td></tr>`;
+        if (countEl) countEl.textContent = '';
+        return;
+    }
+
+    tbody.innerHTML = rows.map(r => {
+        const port = CRED_SERVICE_PORTS[r.service] || '—';
+        const badge = CRED_SERVICE_COLORS[r.service] || 'bg-slate-700 text-gray-300';
+        const pwDisplay = r.password ? `<span class="font-mono">${escapeHtml(r.password)}</span>` : '<span class="text-gray-500 italic">none</span>';
+        const safePw = r.password ? escapeHtml(r.password).replace(/'/g, '&#39;') : '';
+        return `<tr class="border-b border-slate-800 hover:bg-slate-800 transition-colors">
+            <td class="py-3 px-4 font-mono text-sm">${escapeHtml(r.ip || '—')}</td>
+            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs font-semibold uppercase ${badge}">${escapeHtml(r.service)}</span></td>
+            <td class="py-3 px-4 text-gray-400">${port}</td>
+            <td class="py-3 px-4 font-mono">${escapeHtml(r.username || '—')}</td>
+            <td class="py-3 px-4">${pwDisplay}</td>
+            <td class="py-3 px-4">
+                ${r.password ? `<button onclick="copyCredToClipboard('${safePw}')" class="text-xs text-blue-400 hover:text-blue-300 px-2 py-1 rounded hover:bg-slate-700 transition-colors" title="Copy password">Copy</button>` : ''}
+            </td>
+        </tr>`;
+    }).join('');
+
+    if (countEl) countEl.textContent = `Showing ${rows.length} of ${data.length} credential${data.length !== 1 ? 's' : ''}`;
+}
+
+function copyCredToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        addConsoleMessage('Password copied to clipboard', 'success');
+    }).catch(() => {
+        addConsoleMessage('Copy failed — check browser permissions', 'warning');
+    });
+}
+
+function exportCredentialsCSV() {
+    if (!credentialsCache || credentialsCache.length === 0) {
+        addConsoleMessage('No credentials to export', 'warning');
+        return;
+    }
+    const csvRows = [['IP', 'Service', 'Port', 'Username', 'Password']];
+    credentialsCache.forEach(r => {
+        csvRows.push([r.ip || '', r.service || '', CRED_SERVICE_PORTS[r.service] || '', r.username || '', r.password || '']);
+    });
+    const csv = csvRows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ragnar_credentials_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
 const configMetadata = {
     manual_mode: {
         label: "Pentest Mode",
@@ -936,6 +1079,9 @@ async function loadTabData(tabName) {
             break;
         case 'adv-vuln':
             loadAdvancedVulnData(); // Non-blocking - tab shows immediately, data fills in
+            break;
+        case 'credentials':
+            loadCredentials();
             break;
     }
 }
