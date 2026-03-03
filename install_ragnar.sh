@@ -993,7 +993,13 @@ After=network.target
 ExecStartPre=-/bin/bash -c '/home/ragnar/Ragnar/kill_port_8000.sh; ip link set mon0 down 2>/dev/null; iw mon0 del 2>/dev/null; systemctl stop pwnagotchi 2>/dev/null; systemctl stop bettercap 2>/dev/null; true'
 EOF
 
-    # wipe_epd is now integrated into Ragnar.py startup (faster: avoids separate Python process)
+    if [ -n "$wipe_exec" ]; then
+        # Prefix with - so wipe_epd failure does not block service start
+        # Must run as separate process: GPIO pins conflict if shared with Display's EPDHelper
+        cat >> /etc/systemd/system/ragnar.service << EOF
+ExecStartPre=-/usr/bin/python3 -OO /home/ragnar/Ragnar/wipe_epd.py
+EOF
+    fi
 
     cat >> /etc/systemd/system/ragnar.service << EOF
 ExecStart=/usr/bin/python3 -OO /home/ragnar/Ragnar/${entrypoint_file}

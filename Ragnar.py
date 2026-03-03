@@ -270,15 +270,8 @@ if __name__ == "__main__":
                 except Exception:
                     pass
 
-        # Wipe e-paper display in-process (avoids spawning a separate Python interpreter)
-        try:
-            from wipe_epd import wipe_display, resolve_epd_type
-            epd_type = resolve_epd_type()
-            if epd_type:
-                logger.info(f"Wiping e-paper display ({epd_type})...")
-                wipe_display(epd_type)
-        except Exception as e:
-            logger.warning(f"wipe_epd skipped: {e}")
+        # wipe_epd stays as ExecStartPre (separate process) to avoid GPIO conflicts
+        # with the Display's EPDHelper instance that shares the same pins.
 
         logger.info("Starting display thread...")
         shared_data.display_should_exit = False  # Initialize display should_exit
