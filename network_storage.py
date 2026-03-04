@@ -61,7 +61,9 @@ class NetworkStorageManager:
          intelligence_dir,
          threat_dir,
          data_stolen_dir,
-         credentials_dir) = self._ensure_network_dirs(slug)
+         credentials_dir,
+         scan_results_dir,
+         vulnerabilities_dir) = self._ensure_network_dirs(slug)
         db_filename = f"{slug}.db"
         context = {
             'ssid': ssid,
@@ -72,7 +74,18 @@ class NetworkStorageManager:
             'threat_intelligence_dir': threat_dir,
             'data_stolen_dir': data_stolen_dir,
             'credentials_dir': credentials_dir,
+            'scan_results_dir': scan_results_dir,
+            'vulnerabilities_dir': vulnerabilities_dir,
         }
+        # Persist SSID so the file browser can display human-readable names
+        if ssid:
+            ssid_file = os.path.join(network_dir, 'ssid.txt')
+            if not os.path.exists(ssid_file):
+                try:
+                    with open(ssid_file, 'w', encoding='utf-8') as _f:
+                        _f.write(ssid)
+                except IOError:
+                    pass
         return context
 
     def _ensure_network_dirs(self, slug: str):
@@ -83,19 +96,26 @@ class NetworkStorageManager:
         loot_dir = os.path.join(network_dir, 'loot')
         data_stolen_dir = os.path.join(loot_dir, 'data_stolen')
         credentials_dir = os.path.join(loot_dir, 'credentials')
+        output_dir = os.path.join(network_dir, 'output')
+        scan_results_dir = os.path.join(output_dir, 'scan_results')
+        vulnerabilities_dir = os.path.join(output_dir, 'vulnerabilities')
 
         os.makedirs(db_dir, exist_ok=True)
         os.makedirs(intelligence_dir, exist_ok=True)
         os.makedirs(threat_dir, exist_ok=True)
         os.makedirs(data_stolen_dir, exist_ok=True)
         os.makedirs(credentials_dir, exist_ok=True)
+        os.makedirs(scan_results_dir, exist_ok=True)
+        os.makedirs(vulnerabilities_dir, exist_ok=True)
 
         return (network_dir,
                 db_dir,
                 intelligence_dir,
                 threat_dir,
                 data_stolen_dir,
-                credentials_dir)
+                credentials_dir,
+                scan_results_dir,
+                vulnerabilities_dir)
 
     def _slugify(self, ssid: Optional[str]) -> str:
         source = ssid.strip().lower() if ssid else self.default_ssid
@@ -114,7 +134,9 @@ class NetworkStorageManager:
          default_intel_dir,
          default_threat_dir,
          default_data_stolen_dir,
-         default_credentials_dir) = default_dirs
+         default_credentials_dir,
+         _default_scan_results,
+         _default_vulnerabilities) = default_dirs
         default_db_path = os.path.join(default_db_dir, f"{self._slugify(self.default_ssid)}.db")
 
         legacy_db = os.path.join(self.base_data_dir, 'ragnar.db')

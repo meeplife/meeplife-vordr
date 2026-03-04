@@ -318,8 +318,10 @@ class SharedData:
         self.crackedpwddir = self._default_crackedpwddir
         self.datastolendir = self._default_datastolendir
         self.zombiesdir = os.path.join(self.output_dir, 'zombies')
-        self.vulnerabilities_dir = os.path.join(self.output_dir, 'vulnerabilities')
-        self.scan_results_dir = os.path.join(self.output_dir, "scan_results")
+        self._default_vulnerabilities_dir = os.path.join(self.output_dir, 'vulnerabilities')
+        self._default_scan_results_dir = os.path.join(self.output_dir, "scan_results")
+        self.vulnerabilities_dir = self._default_vulnerabilities_dir
+        self.scan_results_dir = self._default_scan_results_dir
         # Directories under resourcesdir
         self.picdir = os.path.join(self.resourcesdir, 'images')
         self.fontdir = os.path.join(self.resourcesdir, 'fonts')
@@ -340,7 +342,7 @@ class SharedData:
         self.livestatusfile = os.path.join(self.datadir, 'livestatus.csv')
         self.gamification_file = os.path.join(self.datadir, 'gamification.json')
         self.pwnagotchi_status_file = os.path.join(self.datadir, 'pwnagotchi_status.json')
-        # Files directly under vulnerabilities_dir
+        # Files directly under vulnerabilities_dir (kept in sync via _update_output_paths)
         self.vuln_summary_file = os.path.join(self.vulnerabilities_dir, 'vulnerability_summary.csv')
         self.vuln_scan_progress_file = os.path.join(self.vulnerabilities_dir, 'scan_progress.json')
         # Files directly under dictionarydir
@@ -365,6 +367,9 @@ class SharedData:
         loot_data_dir = context.get('data_stolen_dir') or self._default_datastolendir
         loot_credentials_dir = context.get('credentials_dir') or self._default_crackedpwddir
         self._update_loot_paths(loot_data_dir, loot_credentials_dir)
+        scan_results_dir = context.get('scan_results_dir') or self._default_scan_results_dir
+        vulnerabilities_dir = context.get('vulnerabilities_dir') or self._default_vulnerabilities_dir
+        self._update_output_paths(scan_results_dir, vulnerabilities_dir)
         if configure_db and hasattr(self, 'db'):
             self._configure_database()
 
@@ -412,6 +417,17 @@ class SharedData:
             self.crackedpwddir = credentials_dir
         self.crackedpwd_dir = self.crackedpwddir  # legacy attribute name used by web UI
         self._refresh_credential_files()
+
+    def _update_output_paths(self, scan_results_dir, vulnerabilities_dir):
+        """Switch scan result and vulnerability dirs to the active network's paths."""
+        if scan_results_dir:
+            os.makedirs(scan_results_dir, exist_ok=True)
+            self.scan_results_dir = scan_results_dir
+        if vulnerabilities_dir:
+            os.makedirs(vulnerabilities_dir, exist_ok=True)
+            self.vulnerabilities_dir = vulnerabilities_dir
+            self.vuln_summary_file = os.path.join(vulnerabilities_dir, 'vulnerability_summary.csv')
+            self.vuln_scan_progress_file = os.path.join(vulnerabilities_dir, 'scan_progress.json')
 
     def _refresh_credential_files(self):
         """Keep credential CSV paths aligned with the active credential directory."""
