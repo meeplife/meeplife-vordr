@@ -20,10 +20,51 @@ class PushoverService:
         self.shared_data = shared_data
         self._lock = threading.Lock()
         # Tracks already-notified items to avoid spamming
-        self._notified_devices = set()   # set of IPs
-        self._notified_vulns = set()     # set of (ip, cve) tuples
+        self._notified_devices = set()   # set of IPs ever notified (persisted across restarts via DB load)
+        self._offline_devices = set()    # IPs that went offline this session (for back-online detection)
+        self._last_notified_vuln_count = 0  # last count we sent a vuln alert for
         self._notified_creds = 0         # last known cred count
         self._last_send_ts = 0.0         # rate-limit: min 2 s between sends
+        self._load_known_state_from_db()
+
+    # ------------------------------------------------------------------
+    # DB state loader — prevents restart-triggered false notifications
+    # ------------------------------------------------------------------
+
+    def _load_known_state_from_db(self):
+        """Pre-populate _notified_devices and _last_notified_vuln_count from the DB
+        so that a restart does not re-notify about already-known devices/vulns."""
+        try:
+            db = getattr(self.shared_data, 'db_manager', None)
+            if db is None:
+                return
+            conn = db.get_connection()
+            if conn is None:
+                return
+            cursor = conn.cursor()
+            # Load all known IPs
+            cursor.execute("SELECT ip FROM hosts WHERE ip IS NOT NULL AND ip != ''")
+            rows = cursor.fetchall()
+            with self._lock:
+                for row in rows:
+                    ip = row[0] if isinstance(row, (list, tuple)) else row.get('ip', '')
+                    if ip:
+                        self._notified_devices.add(ip)
+            # Load current vuln count as baseline (so we only alert on genuinely new ones)
+            cursor.execute(
+                "SELECT COUNT(*) FROM hosts "
+                "WHERE vulnerabilities IS NOT NULL AND vulnerabilities != '' AND vulnerabilities != 'None'"
+            )
+            row = cursor.fetchone()
+            baseline = row[0] if row else 0
+            with self._lock:
+                self._last_notified_vuln_count = baseline
+            logger.debug(
+                f"Pushover: loaded {len(self._notified_devices)} known IPs, "
+                f"vuln baseline={baseline} from DB"
+            )
+        except Exception as e:
+            logger.debug(f"Pushover DB state load skipped: {e}")
 
     # ------------------------------------------------------------------
     # Key helpers (reads from .env via EnvManager)
@@ -102,7 +143,7 @@ class PushoverService:
     # ------------------------------------------------------------------
 
     def notify_new_devices(self, new_ips):
-        """Notify about newly discovered devices (deduped)."""
+        """Notify about devices that have NEVER been seen before (deduped against DB)."""
         if not self.is_enabled():
             return
         if not self.shared_data.config.get("pushover_notify_new_device", True):
@@ -112,15 +153,17 @@ class PushoverService:
             return
         self._notified_devices.update(truly_new)
         count = len(truly_new)
-        ip_list = ", ".join(truly_new[:5])
+        ip_list = ", ".join(sorted(truly_new)[:5])
         suffix = f" (+{count - 5} more)" if count > 5 else ""
-        msg = f"⚔️ {count} new device(s) discovered on the network:\n{ip_list}{suffix}"
+        msg = f"⚔️ {count} new device(s) discovered on the network for the first time:\n{ip_list}{suffix}"
         threading.Thread(target=self.send, args=(msg, "Ragnar — New Device"), daemon=True).start()
 
     def notify_device_lost(self, lost_ips):
-        """Notify when devices go offline."""
+        """Notify when devices go offline (and remember them for back-online detection)."""
         if not self.is_enabled():
             return
+        # Always track offline state even if notifications are disabled, so back-online works
+        self._offline_devices.update(lost_ips)
         if not self.shared_data.config.get("pushover_notify_device_lost", False):
             return
         if not lost_ips:
@@ -131,17 +174,37 @@ class PushoverService:
         msg = f"🛡️ {count} device(s) went offline:\n{ip_list}{suffix}"
         threading.Thread(target=self.send, args=(msg, "Ragnar — Device Lost"), daemon=True).start()
 
-    def notify_new_vulnerabilities(self, vuln_count, details=""):
-        """Notify about newly discovered vulnerabilities."""
+    def notify_device_back_online(self, appeared_ips):
+        """Notify when a previously known device that went offline comes back online."""
+        if not self.is_enabled():
+            return
+        if not self.shared_data.config.get("pushover_notify_device_back_online", False):
+            return
+        # Only alert for IPs we actually saw go offline this session
+        back_online = [ip for ip in appeared_ips
+                       if ip in self._notified_devices and ip in self._offline_devices]
+        if not back_online:
+            return
+        # Remove from offline tracking since they're back
+        self._offline_devices.difference_update(back_online)
+        count = len(back_online)
+        ip_list = ", ".join(sorted(back_online)[:5])
+        suffix = f" (+{count - 5} more)" if count > 5 else ""
+        msg = f"📶 {count} device(s) back online:\n{ip_list}{suffix}"
+        threading.Thread(target=self.send, args=(msg, "Ragnar — Device Back Online"), daemon=True).start()
+
+    def notify_new_vulnerabilities(self, new_total):
+        """Notify about newly discovered vulnerabilities (compares against last notified count)."""
         if not self.is_enabled():
             return
         if not self.shared_data.config.get("pushover_notify_new_vulnerability", True):
             return
-        if vuln_count <= 0:
-            return
-        msg = f"🔥 {vuln_count} new vulnerability/vulnerabilities found!"
-        if details:
-            msg += f"\n{details[:200]}"
+        with self._lock:
+            if new_total <= self._last_notified_vuln_count:
+                return
+            delta = new_total - self._last_notified_vuln_count
+            self._last_notified_vuln_count = new_total
+        msg = f"🔥 {delta} new vulnerability/vulnerabilities found! (total: {new_total})"
         threading.Thread(target=self.send, args=(msg, "Ragnar — Vulnerability Alert", 1), daemon=True).start()
 
     def notify_new_credentials(self, new_count, total):
@@ -157,15 +220,3 @@ class PushoverService:
         self._notified_creds = total
         msg = f"🗝️ {new_count} new credential(s) captured! (total: {total})"
         threading.Thread(target=self.send, args=(msg, "Ragnar — Credentials"), daemon=True).start()
-
-    def notify_scan_complete(self, hosts, ports, vulns):
-        """Notify when a full scan cycle completes."""
-        if not self.is_enabled():
-            return
-        if not self.shared_data.config.get("pushover_notify_scan_complete", False):
-            return
-        msg = (
-            f"📡 Scan cycle complete\n"
-            f"Hosts: {hosts}  |  Ports: {ports}  |  Vulns: {vulns}"
-        )
-        threading.Thread(target=self.send, args=(msg, "Ragnar — Scan Complete"), daemon=True).start()

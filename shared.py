@@ -610,7 +610,7 @@ class SharedData:
             "pushover_notify_new_vulnerability": True,
             "pushover_notify_new_credential": True,
             "pushover_notify_device_lost": False,
-            "pushover_notify_scan_complete": False,
+            "pushover_notify_device_back_online": False,
 
             "__title_pwnagotchi__": "Pwnagotchi Integration",
             "pwnagotchi_installed": False,

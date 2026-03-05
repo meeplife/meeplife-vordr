@@ -1379,17 +1379,17 @@ def sync_vulnerability_count():
         logger.debug(f"Updated shared_data.vulnnbr: {old_count} -> {vuln_count}")
 
         # ── Pushover: new vulnerability notification ──
-        if vuln_count > old_count:
-            try:
-                from pushover_service import PushoverService
-                _po = getattr(shared_data, '_pushover_service', None)
-                if _po is None:
-                    _po = PushoverService(shared_data)
-                    shared_data._pushover_service = _po
-                _po.notify_new_vulnerabilities(vuln_count - old_count,
-                    f"{vuln_count - old_count} new CVE(s) detected (total: {vuln_count})")
-            except Exception as _po_err:
-                logger.debug(f"Pushover vulnerability notification skipped: {_po_err}")
+        # Always pass the absolute total; PushoverService tracks its own baseline
+        # (loaded from DB at startup) to avoid re-alerting on restart.
+        try:
+            from pushover_service import PushoverService
+            _po = getattr(shared_data, '_pushover_service', None)
+            if _po is None:
+                _po = PushoverService(shared_data)
+                shared_data._pushover_service = _po
+            _po.notify_new_vulnerabilities(vuln_count)
+        except Exception as _po_err:
+            logger.debug(f"Pushover vulnerability notification skipped: {_po_err}")
 
         old_host_count = getattr(shared_data, 'vulnerable_host_count', 0)
         shared_data.vulnerable_host_count = len(vulnerable_hosts)
@@ -1563,6 +1563,7 @@ def sync_all_counts():
                     shared_data._pushover_service = _po
                 if new_active_hosts:
                     _po.notify_new_devices(new_active_hosts)
+                    _po.notify_device_back_online(new_active_hosts)
                 if lost_active_hosts:
                     _po.notify_device_lost(lost_active_hosts)
             except Exception as _po_err:

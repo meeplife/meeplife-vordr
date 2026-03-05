@@ -9630,7 +9630,7 @@ async function loadPushoverConfiguration(config) {
         'pushover-notify-new-vuln': 'pushover_notify_new_vulnerability',
         'pushover-notify-new-cred': 'pushover_notify_new_credential',
         'pushover-notify-device-lost': 'pushover_notify_device_lost',
-        'pushover-notify-scan-complete': 'pushover_notify_scan_complete'
+        'pushover-notify-device-back-online': 'pushover_notify_device_back_online'
     };
     for (const [elemId, key] of Object.entries(evtMap)) {
         const cb = document.getElementById(elemId);
@@ -9703,7 +9703,7 @@ async function savePushoverTriggers() {
         'pushover-notify-new-vuln': 'pushover_notify_new_vulnerability',
         'pushover-notify-new-cred': 'pushover_notify_new_credential',
         'pushover-notify-device-lost': 'pushover_notify_device_lost',
-        'pushover-notify-scan-complete': 'pushover_notify_scan_complete'
+        'pushover-notify-device-back-online': 'pushover_notify_device_back_online'
     };
     const payload = {};
     for (const [elemId, key] of Object.entries(evtMap)) {
