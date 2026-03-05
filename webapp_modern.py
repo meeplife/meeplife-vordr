@@ -3805,6 +3805,7 @@ def get_network_topology():
             # ----------------------------------------------------------
             # Phase 3: build topology links
             # ----------------------------------------------------------
+            import ipaddress
             potential_aps = []  # Devices that extend the network
 
             # Ensure gateway is in node list even if not in hosts table
@@ -3830,50 +3831,88 @@ def get_network_topology():
                 node_ids.add(gateway_ip)
 
             # Identify network-extending devices (APs, extenders, secondary routers)
-            # Exclude SBCs, servers, Ragnar — they run services but don't extend the network
             _NETWORK_EXTENDER_TYPES = {'access_point', 'extender', 'switch'}
             for node in nodes:
                 if node['is_gateway'] or node['is_ragnar']:
                     continue
                 if node['type'] in _NETWORK_EXTENDER_TYPES:
                     potential_aps.append(node)
-                # Only treat a device as a secondary router if it has very high
-                # confidence (vendor-confirmed) AND is NOT an SBC
                 elif node['type'] == 'router' and node['confidence'] >= 0.8:
                     potential_aps.append(node)
 
-            # Build links — default: everything connects to gateway
-            links = []
-            ap_macs_prefix = {}
+            # ── Determine the gateway's /24 subnet ──
+            gw_subnet_prefix = None
+            if gateway_ip:
+                try:
+                    gw_subnet_prefix = str(ipaddress.ip_network(f"{gateway_ip}/24", strict=False))
+                except Exception:
+                    pass
+
+            # ── Build AP subnet map ──
+            # If an AP/router is on a DIFFERENT /24 than the gateway,
+            # every device on that /24 is assumed to go through that AP.
+            ap_subnet_map = {}    # "/24 network string" → AP ip
+            ap_macs_prefix = {}   # MAC OUI prefix → AP ip  (fallback for same-subnet)
             for ap in potential_aps:
+                ap_ip = ap.get('ip', '')
+                if not ap_ip:
+                    continue
+
+                # Subnet-based mapping
+                try:
+                    ap_net = str(ipaddress.ip_network(f"{ap_ip}/24", strict=False))
+                    if gw_subnet_prefix and ap_net != gw_subnet_prefix:
+                        # This AP serves a different subnet
+                        ap_subnet_map[ap_net] = ap_ip
+                    elif not gw_subnet_prefix:
+                        ap_subnet_map[ap_net] = ap_ip
+                except Exception:
+                    pass
+
+                # MAC OUI fallback (same-subnet heuristic)
                 mac = ap.get('mac', '')
                 if mac and len(mac) >= 8:
                     prefix = mac[:8].lower()
-                    ap_macs_prefix[prefix] = ap['ip']
+                    ap_macs_prefix[prefix] = ap_ip
 
+            # ── Build links ──
+            links = []
             for node in nodes:
                 if node['is_gateway']:
                     continue
                 target = gateway_ip or (nodes[0]['ip'] if nodes else None)
                 link_type = 'default'
-
-                # Check if this device should connect to an AP/extender instead
-                mac = node.get('mac', '')
+                node_ip = node.get('ip', '')
                 node_type = node.get('type', '')
-                if mac and len(mac) >= 8 and node_type not in ('router', 'access_point', 'extender', 'switch'):
-                    prefix = mac[:8].lower()
-                    if prefix in ap_macs_prefix and ap_macs_prefix[prefix] != node['ip']:
-                        target = ap_macs_prefix[prefix]
-                        link_type = 'ap_inferred'
+
+                # Strategy 1: Subnet-based assignment
+                # If this device is on the same /24 as an AP that is NOT
+                # on the gateway's subnet, route it through that AP.
+                try:
+                    node_net = str(ipaddress.ip_network(f"{node_ip}/24", strict=False))
+                    if node_net in ap_subnet_map and ap_subnet_map[node_net] != node_ip:
+                        target = ap_subnet_map[node_net]
+                        link_type = 'subnet_inferred'
+                except Exception:
+                    node_net = None
+
+                # Strategy 2: MAC OUI prefix (same-subnet fallback)
+                if link_type == 'default' and node_type not in ('router', 'access_point', 'extender', 'switch'):
+                    mac = node.get('mac', '')
+                    if mac and len(mac) >= 8:
+                        prefix = mac[:8].lower()
+                        if prefix in ap_macs_prefix and ap_macs_prefix[prefix] != node_ip:
+                            target = ap_macs_prefix[prefix]
+                            link_type = 'ap_inferred'
 
                 if target:
                     links.append({
-                        'source': node['ip'],
+                        'source': node_ip,
                         'target': target,
                         'type': link_type,
                     })
 
-            # APs connect to gateway
+            # APs / extenders connect upstream to gateway
             for ap in potential_aps:
                 if gateway_ip:
                     links.append({

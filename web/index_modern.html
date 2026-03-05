@@ -217,6 +217,12 @@
         }
         /* Toggle switch: show green when ON, regardless of Tailwind purge state */
         label > input[type="checkbox"]:checked + div { background-color: #16a34a !important; }
+        /* AI map toggle – uses Ragnar color, not green */
+        #map-ai-toggle-track { background: #475569; border-radius: 9999px; width: 36px; height: 20px; position: relative; cursor: pointer; transition: background 0.2s; }
+        #map-ai-toggle-track.active { background: var(--ragnar-600, #7c3aed); }
+        #map-ai-toggle-track.disabled { opacity: 0.35; cursor: not-allowed; }
+        #map-ai-toggle-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 9999px; transition: transform 0.2s; }
+        #map-ai-toggle-track.active #map-ai-toggle-knob { transform: translateX(16px); }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 </head>
@@ -865,17 +871,16 @@
                     </div>
                     <div class="flex items-center gap-3 shrink-0">
                         <!-- AI toggle -->
-                        <div id="map-ai-toggle-wrapper" class="flex items-center gap-2">
+                        <div id="map-ai-toggle-wrapper" class="flex items-center gap-2" title="AI not available – enable in Settings">
                             <span class="text-xs text-gray-400 whitespace-nowrap">AI Classify</span>
                             <!-- Spinner shown during AI work -->
-                            <svg id="map-ai-spinner" class="hidden animate-spin h-4 w-4 text-Ragnar-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <svg id="map-ai-spinner" class="hidden animate-spin h-4 w-4" style="color:#7c3aed" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                             </svg>
-                            <label class="relative inline-flex items-center cursor-pointer">
-                                <input type="checkbox" id="map-ai-toggle" class="sr-only peer" onchange="onMapAiToggle(this.checked)">
-                                <div class="w-9 h-5 bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-Ragnar-600 peer-disabled:opacity-40 peer-disabled:cursor-not-allowed"></div>
-                            </label>
+                            <div id="map-ai-toggle-track" class="disabled" onclick="onMapAiToggleClick()">
+                                <div id="map-ai-toggle-knob"></div>
+                            </div>
                         </div>
                         <!-- Refresh button -->
                         <button onclick="refreshNetworkMap()" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors text-sm whitespace-nowrap shrink-0">

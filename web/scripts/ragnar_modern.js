@@ -15260,15 +15260,16 @@ async function _checkMapAiStatus() {
         const resp = await networkAwareFetch('/api/ai/status');
         const data = await resp.json();
         _mapAiAvailable = !!(data.enabled && data.configured);
-        const toggle = document.getElementById('map-ai-toggle');
-        if (toggle) {
-            toggle.disabled = !_mapAiAvailable;
-            if (!_mapAiAvailable) {
-                toggle.checked = false;
+        const track = document.getElementById('map-ai-toggle-track');
+        if (track) {
+            if (_mapAiAvailable) {
+                track.classList.remove('disabled');
+            } else {
+                track.classList.add('disabled');
+                track.classList.remove('active');
                 _mapAiEnabled = false;
             }
         }
-        // Grey out label when unavailable
         const wrapper = document.getElementById('map-ai-toggle-wrapper');
         if (wrapper) {
             wrapper.title = _mapAiAvailable ? 'Use GPT-5 Nano to improve device classification' : 'AI not available – enable in Settings';
@@ -15276,10 +15277,13 @@ async function _checkMapAiStatus() {
     } catch { _mapAiAvailable = false; }
 }
 
-function onMapAiToggle(checked) {
-    _mapAiEnabled = checked && _mapAiAvailable;
+function onMapAiToggleClick() {
+    if (!_mapAiAvailable) return;
+    const track = document.getElementById('map-ai-toggle-track');
+    if (!track) return;
+    _mapAiEnabled = !_mapAiEnabled;
+    track.classList.toggle('active', _mapAiEnabled);
     if (_mapAiEnabled) {
-        // Force re-classify with AI on next load
         _mapAiCacheValid = false;
         refreshNetworkMap();
     }
@@ -15387,11 +15391,13 @@ function renderNetworkMap(nodes, links, deviceColors, deviceIcons) {
     // Link stroke styles by type
     function linkStroke(d) {
         if (d.type === 'ap_uplink') return '#8b5cf6';
+        if (d.type === 'subnet_inferred') return '#06b6d4';
         if (d.type === 'ap_inferred') return '#6366f1';
         return '#334155';
     }
     function linkDash(d) {
         if (d.type === 'ap_inferred') return '4,3';
+        if (d.type === 'subnet_inferred') return '6,3';
         return null;
     }
 
@@ -15572,4 +15578,4 @@ window.editTargetCredential = editTargetCredential;
 window.deleteTargetCredential = deleteTargetCredential;
 window.loadNetworkMap = loadNetworkMap;
 window.refreshNetworkMap = refreshNetworkMap;
-window.onMapAiToggle = onMapAiToggle;
+window.onMapAiToggleClick = onMapAiToggleClick;
