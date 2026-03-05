@@ -147,12 +147,12 @@ function displayCredentials(data) {
         const pwDisplay = r.password ? `<span class="font-mono">${escapeHtml(r.password)}</span>` : '<span class="text-gray-500 italic">none</span>';
         const safePw = r.password ? escapeHtml(r.password).replace(/'/g, '&#39;') : '';
         return `<tr class="border-b border-slate-800 hover:bg-slate-800 transition-colors">
-            <td class="py-3 px-4 font-mono text-sm">${escapeHtml(r.ip || '—')}</td>
-            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs font-semibold uppercase ${badge}">${escapeHtml(r.service)}</span></td>
-            <td class="py-3 px-4 text-gray-400">${port}</td>
-            <td class="py-3 px-4 font-mono">${escapeHtml(r.username || '—')}</td>
-            <td class="py-3 px-4">${pwDisplay}</td>
-            <td class="py-3 px-4">
+            <td class="py-3 px-4 font-mono text-sm whitespace-nowrap">${escapeHtml(r.ip || '—')}</td>
+            <td class="py-3 px-4 whitespace-nowrap"><span class="px-2 py-0.5 rounded text-xs font-semibold uppercase ${badge}">${escapeHtml(r.service)}</span></td>
+            <td class="py-3 px-4 text-gray-400 whitespace-nowrap">${port}</td>
+            <td class="py-3 px-4 font-mono whitespace-nowrap">${escapeHtml(r.username || '—')}</td>
+            <td class="py-3 px-4 whitespace-nowrap">${pwDisplay}</td>
+            <td class="py-3 px-4 whitespace-nowrap">
                 ${r.password ? `<button onclick="copyCredToClipboard('${safePw}')" class="text-xs text-blue-400 hover:text-blue-300 px-2 py-1 rounded hover:bg-slate-700 transition-colors" title="Copy password">Copy</button>` : ''}
             </td>
         </tr>`;

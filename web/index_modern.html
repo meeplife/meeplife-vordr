@@ -970,21 +970,21 @@
 
                 <!-- Table -->
                 <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
+                    <table class="w-full text-sm" style="min-width:640px;">
                         <thead>
                             <tr class="border-b border-slate-700">
-                                <th onclick="sortCredsBy('ip')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none">
+                                <th onclick="sortCredsBy('ip')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
                                     IP <span id="cred-sort-ip" class="text-xs"></span>
                                 </th>
-                                <th onclick="sortCredsBy('service')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none">
+                                <th onclick="sortCredsBy('service')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
                                     Service <span id="cred-sort-service" class="text-xs"></span>
                                 </th>
-                                <th class="text-left py-3 px-4 text-gray-400 font-medium">Port</th>
-                                <th onclick="sortCredsBy('username')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none">
+                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Port</th>
+                                <th onclick="sortCredsBy('username')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
                                     Username <span id="cred-sort-username" class="text-xs"></span>
                                 </th>
-                                <th class="text-left py-3 px-4 text-gray-400 font-medium">Password</th>
-                                <th class="text-left py-3 px-4 text-gray-400 font-medium">Copy</th>
+                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Password</th>
+                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Copy</th>
                             </tr>
                         </thead>
                         <tbody id="cred-table-body">
