@@ -27,6 +27,51 @@ class EnvManager:
         logger.info(f"Project root identified as: {self.project_root}")
         logger.info(f".env file path set to: {self.env_file_path}")
 
+    # ------------------------------------------------------------------
+    # Generic helpers for multi-key .env management
+    # ------------------------------------------------------------------
+
+    def _read_env_dict(self):
+        """Read all key=value pairs from the .env file into a dict."""
+        env = {}
+        if os.path.exists(self.env_file_path):
+            with open(self.env_file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        env[key] = value
+        return env
+
+    def _write_env_dict(self, env):
+        """Persist a full dict back to the .env file."""
+        with open(self.env_file_path, 'w') as f:
+            for key, value in env.items():
+                f.write(f'{key}={value}\n')
+
+    def get_env_key(self, key):
+        """Return the value of *key* from os.environ or the .env file."""
+        val = os.environ.get(key)
+        if val:
+            return val
+        env = self._read_env_dict()
+        return env.get(key)
+
+    def set_env_key(self, key, value):
+        """Set a single key in the .env file (preserves other keys)."""
+        env = self._read_env_dict()
+        env[key] = value
+        self._write_env_dict(env)
+        os.environ[key] = value
+
+    def delete_env_key(self, key):
+        """Remove a single key from the .env file."""
+        env = self._read_env_dict()
+        if key in env:
+            del env[key]
+            self._write_env_dict(env)
+        os.environ.pop(key, None)
+
     def get_token(self):
         """
         Gets the token from the RAGNAR_OPENAI_API_KEY in the .env file.

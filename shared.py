@@ -604,6 +604,14 @@ class SharedData:
             "ai_max_tokens": 500,
             "ai_temperature": 0.7,
 
+            "__title_pushover__": "Pushover Notifications",
+            "pushover_enabled": False,
+            "pushover_notify_new_device": True,
+            "pushover_notify_new_vulnerability": True,
+            "pushover_notify_new_credential": True,
+            "pushover_notify_device_lost": False,
+            "pushover_notify_scan_complete": False,
+
             "__title_pwnagotchi__": "Pwnagotchi Integration",
             "pwnagotchi_installed": False,
             "pwnagotchi_mode": "ragnar",

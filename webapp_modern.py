@@ -14427,6 +14427,113 @@ def remove_ai_token():
 
 
 # ============================================================================
+# PUSHOVER NOTIFICATION ENDPOINTS
+# ============================================================================
+
+@app.route('/api/pushover/keys', methods=['GET'])
+def get_pushover_keys():
+    """Get Pushover key status (without revealing full keys)."""
+    try:
+        from env_manager import EnvManager
+        em = EnvManager()
+        user_key = em.get_env_key("RAGNAR_PUSHOVER_USER_KEY")
+        api_token = em.get_env_key("RAGNAR_PUSHOVER_API_TOKEN")
+        return jsonify({
+            'user_key_configured': bool(user_key),
+            'api_token_configured': bool(api_token),
+            'user_key_preview': f"{user_key[:6]}...{user_key[-4:]}" if user_key and len(user_key) > 10 else None,
+            'api_token_preview': f"{api_token[:6]}...{api_token[-4:]}" if api_token and len(api_token) > 10 else None,
+        })
+    except Exception as e:
+        logger.error(f"Error getting Pushover key status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pushover/keys', methods=['POST'])
+def save_pushover_keys():
+    """Save Pushover user key and/or API token to .env file."""
+    try:
+        from env_manager import EnvManager
+        em = EnvManager()
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        saved = []
+        user_key = data.get('user_key', '').strip()
+        api_token = data.get('api_token', '').strip()
+
+        if user_key:
+            em.set_env_key("RAGNAR_PUSHOVER_USER_KEY", user_key)
+            saved.append("User Key")
+        if api_token:
+            em.set_env_key("RAGNAR_PUSHOVER_API_TOKEN", api_token)
+            saved.append("API Token")
+
+        if not saved:
+            return jsonify({'error': 'No keys provided'}), 400
+
+        # Auto-enable Pushover if both keys are now set
+        uk = em.get_env_key("RAGNAR_PUSHOVER_USER_KEY")
+        at = em.get_env_key("RAGNAR_PUSHOVER_API_TOKEN")
+        auto_enabled = False
+        if uk and at and not shared_data.config.get('pushover_enabled', False):
+            shared_data.config['pushover_enabled'] = True
+            shared_data.save_config()
+            auto_enabled = True
+
+        return jsonify({
+            'success': True,
+            'message': f"✓ Saved: {', '.join(saved)}",
+            'auto_enabled': auto_enabled,
+            'both_configured': bool(uk and at),
+        })
+    except Exception as e:
+        logger.error(f"Error saving Pushover keys: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pushover/keys', methods=['DELETE'])
+def remove_pushover_keys():
+    """Remove Pushover keys from .env file."""
+    try:
+        from env_manager import EnvManager
+        em = EnvManager()
+        em.delete_env_key("RAGNAR_PUSHOVER_USER_KEY")
+        em.delete_env_key("RAGNAR_PUSHOVER_API_TOKEN")
+        shared_data.config['pushover_enabled'] = False
+        shared_data.save_config()
+        return jsonify({'success': True, 'message': 'Pushover keys removed'})
+    except Exception as e:
+        logger.error(f"Error removing Pushover keys: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pushover/test', methods=['POST'])
+def test_pushover():
+    """Send a test Pushover notification."""
+    try:
+        pushover = getattr(shared_data, '_pushover_service', None)
+        if not pushover:
+            from pushover_service import PushoverService
+            pushover = PushoverService(shared_data)
+            shared_data._pushover_service = pushover
+
+        if not pushover.is_configured():
+            return jsonify({'success': False, 'message': 'Pushover keys not configured. Please save your User Key and API Token first.'}), 400
+
+        result = pushover.send(
+            message="Hello there Viking, are you ready for adventures?",
+            title="Ragnar says",
+            sound="bugle"
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error testing Pushover: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ============================================================================
 # SIGNAL HANDLERS
 # ============================================================================
 
