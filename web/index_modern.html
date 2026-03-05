@@ -3803,7 +3803,7 @@
                                     <!-- Enable toggle -->
                                     <div>
                                         <label class="flex items-center space-x-3 cursor-pointer">
-                                            <input type="checkbox" id="pushover-enabled-toggle" onchange="togglePushoverEnabled()" class="w-5 h-5 rounded border-gray-600 text-cyan-600 focus:ring-cyan-500 focus:ring-offset-gray-900">
+                                            <input type="checkbox" id="pushover-enabled-toggle" onchange="togglePushoverEnabled()" class="w-5 h-5 rounded border-gray-600 bg-gray-700 text-gray-600 focus:ring-0">
                                             <span class="text-sm font-medium">Enable Pushover Notifications</span>
                                         </label>
                                         <p class="text-xs text-gray-500 ml-0 sm:ml-8 mt-1">Send push notifications to your phone when events occur</p>
@@ -3841,35 +3841,35 @@
                             <h4 class="font-medium text-sm text-gray-300 mb-3">Notify me when:</h4>
                             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <label class="flex items-center space-x-3 cursor-pointer">
-                                    <input type="checkbox" id="pushover-notify-new-device" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 text-slate-400 focus:ring-slate-500 focus:ring-offset-gray-900">
+                                    <input type="checkbox" id="pushover-notify-new-device" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 bg-gray-700 text-gray-600 focus:ring-0">
                                     <div>
                                         <span class="text-sm font-medium">New Device Discovered</span>
                                         <p class="text-xs text-gray-500">A device appears on the network for the first time</p>
                                     </div>
                                 </label>
                                 <label class="flex items-center space-x-3 cursor-pointer">
-                                    <input type="checkbox" id="pushover-notify-new-vuln" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 text-slate-400 focus:ring-slate-500 focus:ring-offset-gray-900">
+                                    <input type="checkbox" id="pushover-notify-new-vuln" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 bg-gray-700 text-gray-600 focus:ring-0">
                                     <div>
                                         <span class="text-sm font-medium">New Vulnerability Found</span>
                                         <p class="text-xs text-gray-500">A new CVE or security issue is identified</p>
                                     </div>
                                 </label>
                                 <label class="flex items-center space-x-3 cursor-pointer">
-                                    <input type="checkbox" id="pushover-notify-new-cred" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 text-slate-400 focus:ring-slate-500 focus:ring-offset-gray-900">
+                                    <input type="checkbox" id="pushover-notify-new-cred" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 bg-gray-700 text-gray-600 focus:ring-0">
                                     <div>
                                         <span class="text-sm font-medium">New Credential Captured</span>
                                         <p class="text-xs text-gray-500">A username/password is cracked or captured</p>
                                     </div>
                                 </label>
                                 <label class="flex items-center space-x-3 cursor-pointer">
-                                    <input type="checkbox" id="pushover-notify-device-lost" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 text-slate-400 focus:ring-slate-500 focus:ring-offset-gray-900">
+                                    <input type="checkbox" id="pushover-notify-device-lost" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 bg-gray-700 text-gray-600 focus:ring-0">
                                     <div>
                                         <span class="text-sm font-medium">Device Goes Offline</span>
                                         <p class="text-xs text-gray-500">A previously seen device disappears from the network</p>
                                     </div>
                                 </label>
                                 <label class="flex items-center space-x-3 cursor-pointer">
-                                    <input type="checkbox" id="pushover-notify-device-back-online" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 text-slate-400 focus:ring-slate-500 focus:ring-offset-gray-900">
+                                    <input type="checkbox" id="pushover-notify-device-back-online" onchange="savePushoverTriggers()" class="w-4 h-4 rounded border-gray-600 bg-gray-700 text-gray-600 focus:ring-0">
                                     <div>
                                         <span class="text-sm font-medium">Device Back Online</span>
                                         <p class="text-xs text-gray-500">A known device returns after going offline</p>
