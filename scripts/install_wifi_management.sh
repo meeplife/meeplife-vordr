@@ -37,12 +37,28 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Detect the first available WiFi interface (works on Pi and non-Pi hardware)
+detect_wifi_interface() {
+    local iface
+    iface=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | head -1 | cut -d: -f1)
+    if [ -z "$iface" ]; then
+        # Fallback: scan /sys/class/net for wireless devices
+        for dev in /sys/class/net/*/wireless; do
+            if [ -d "$dev" ]; then
+                iface=$(basename "$(dirname "$dev")")
+                break
+            fi
+        done
+    fi
+    echo "${iface:-wlan0}"
+}
+
 check_requirements() {
     print_status "Checking system requirements..."
     
-    # Check if running on Raspberry Pi
-    if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
-        print_warning "This system doesn't appear to be a Raspberry Pi"
+    # Check if running on a known Linux platform
+    if [ ! -f /proc/cpuinfo ]; then
+        print_warning "Cannot detect hardware platform"
         read -p "Continue anyway? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -50,11 +66,14 @@ check_requirements() {
         fi
     fi
     
-    # Check for Wi-Fi interface
-    if ! ip link show wlan0 &>/dev/null; then
-        print_error "No wlan0 interface found. This system may not have Wi-Fi capability."
+    # Check for any Wi-Fi interface (not just wlan0)
+    local wifi_iface
+    wifi_iface=$(detect_wifi_interface)
+    if ! ip link show "$wifi_iface" &>/dev/null; then
+        print_error "No Wi-Fi interface found (looked for $wifi_iface). This system may not have Wi-Fi capability."
         exit 1
     fi
+    print_status "Detected Wi-Fi interface: $wifi_iface"
     
     # Check Python version
     if ! python3 --version | grep -q "Python 3\.[89]" && ! python3 --version | grep -q "Python 3\.1[0-9]"; then

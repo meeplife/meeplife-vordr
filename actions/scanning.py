@@ -86,7 +86,7 @@ class NetworkScanner:
         self.semaphore = threading.Semaphore(min(4, max(1, cpu_count // 2 or 1)))
         self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
         self.running = False
-        self.arp_scan_interface = "wlan0"
+        self.arp_scan_interface = shared_data.config.get('wifi_default_interface', 'wlan0')
         self._active_scan_network = None
         # Initialize SQLite database manager
         self.db = get_db(currentdir=self.currentdir)

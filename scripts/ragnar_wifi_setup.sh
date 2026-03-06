@@ -144,15 +144,37 @@ setup_forwarding() {
     cat > /etc/ragnar/wifi/iptables-rules.sh << 'EOF'
 #!/bin/bash
 # iptables rules for ragnar Wi-Fi AP mode
+# Auto-detect interfaces for non-Pi hardware compatibility
+
+# Detect WiFi AP interface
+WIFI_IFACE=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | head -1 | cut -d: -f1)
+if [ -z "$WIFI_IFACE" ]; then
+    for dev in /sys/class/net/*/wireless; do
+        [ -d "$dev" ] && WIFI_IFACE=$(basename "$(dirname "$dev")") && break
+    done
+fi
+WIFI_IFACE="${WIFI_IFACE:-wlan0}"
+
+# Detect uplink interface
+UPLINK=$(ip route show default 2>/dev/null | grep -oP 'dev \K\S+' | head -1)
+if [ -z "$UPLINK" ] || [ "$UPLINK" = "$WIFI_IFACE" ]; then
+    for dev in /sys/class/net/*; do
+        name=$(basename "$dev")
+        if [[ "$name" =~ ^(eth[0-9]+|enp[0-9]+s[0-9]+|eno[0-9]+|ens[0-9]+)$ ]] && [ -d "$dev" ]; then
+            UPLINK="$name"; break
+        fi
+    done
+fi
+UPLINK="${UPLINK:-eth0}"
 
 # Clear existing rules
 iptables -t nat -F
 iptables -F
 
 # Set up NAT
-iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+iptables -t nat -A POSTROUTING -o "$UPLINK" -j MASQUERADE
+iptables -A FORWARD -i "$UPLINK" -o "$WIFI_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -i "$WIFI_IFACE" -o "$UPLINK" -j ACCEPT
 
 # Allow traffic on loopback
 iptables -A INPUT -i lo -j ACCEPT
@@ -162,7 +184,7 @@ iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Allow AP traffic
-iptables -A INPUT -i wlan0 -j ACCEPT
+iptables -A INPUT -i "$WIFI_IFACE" -j ACCEPT
 
 # Save rules
 iptables-save > /etc/iptables/rules.v4
@@ -304,9 +326,13 @@ EOF
 echo "=== ragnar Wi-Fi Status ==="
 echo
 
+# Auto-detect WiFi interface
+WIFI_IFACE=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | head -1 | cut -d: -f1)
+WIFI_IFACE="${WIFI_IFACE:-wlan0}"
+
 # Check Wi-Fi interface
-echo "Wi-Fi Interface Status:"
-ip addr show wlan0 2>/dev/null || echo "wlan0 not found"
+echo "Wi-Fi Interface Status ($WIFI_IFACE):"
+ip addr show "$WIFI_IFACE" 2>/dev/null || echo "$WIFI_IFACE not found"
 echo
 
 # Check active connections

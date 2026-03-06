@@ -105,7 +105,7 @@ class WiFiManager:
         # AP mode settings
         self.ap_ssid = shared_data.config.get('wifi_ap_ssid', 'Ragnar')
         self.ap_password = shared_data.config.get('wifi_ap_password', 'ragnarconnect')
-        self.ap_interface = "wlan0"
+        self.ap_interface = self.default_wifi_interface
         self.ap_ip = "192.168.4.1"
         self.ap_subnet = "192.168.4.0/24"
         
@@ -1107,11 +1107,11 @@ class WiFiManager:
             
             # Method 2: Check using iwconfig (if available)
             try:
-                result = subprocess.run(['iwconfig', 'wlan0'], 
+                result = subprocess.run(['iwconfig', self.default_wifi_interface], 
                                       capture_output=True, text=True, timeout=5)
                 if result.returncode == 0 and 'ESSID:' in result.stdout and 'Not-Associated' not in result.stdout:
                     # Verify we have an IP address
-                    ip_result = subprocess.run(['ip', 'addr', 'show', 'wlan0'], 
+                    ip_result = subprocess.run(['ip', 'addr', 'show', self.default_wifi_interface], 
                                              capture_output=True, text=True, timeout=5)
                     if ip_result.returncode == 0 and 'inet ' in ip_result.stdout:
                         return True
@@ -1123,10 +1123,10 @@ class WiFiManager:
                 result = subprocess.run(['ping', '-c', '1', '-W', '2', '1.1.1.1'], 
                                       capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:
-                    # Ensure it's going through wlan0
+                    # Check route goes through our WiFi interface
                     route_result = subprocess.run(['ip', 'route', 'get', '1.1.1.1'], 
                                                 capture_output=True, text=True, timeout=3)
-                    if route_result.returncode == 0 and 'dev wlan0' in route_result.stdout:
+                    if route_result.returncode == 0 and f'dev {self.default_wifi_interface}' in route_result.stdout:
                         return True
             except Exception:
                 pass  # Network unreachable, that's fine
@@ -1152,7 +1152,7 @@ class WiFiManager:
                 if not name or state not in ('DOWN', 'DISCONNECTED', 'UNAVAILABLE', 'UNMANAGED'):
                     continue
                 # Skip secondary interfaces (e.g. wlan1) — they may be intentionally
-                # unmanaged for monitor mode and forcing them managed disrupts wlan0.
+                # unmanaged for monitor mode and forcing them managed disrupts the primary.
                 if name != self.default_wifi_interface:
                     self.logger.debug(f"Skipping non-default Wi-Fi interface {name} (state: {state})")
                     continue
@@ -1187,8 +1187,8 @@ class WiFiManager:
     def get_current_ssid(self):
         """Get the current connected SSID"""
         try:
-            # Method 1: Get SSID from active connection on wlan0 device
-            result = subprocess.run(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'dev', 'show', 'wlan0'], 
+            # Method 1: Get SSID from active connection on default WiFi device
+            result = subprocess.run(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'dev', 'show', self.default_wifi_interface], 
                                   capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout.strip():
                 # Extract connection name (which is usually the SSID for WiFi)
@@ -1394,8 +1394,8 @@ class WiFiManager:
             self.ap_logger.warning(f"Secondary adapter scan failed on {secondary}: {exc}")
             return []
         finally:
-            # Restore wlan1 to unmanaged so NM doesn't add a competing default route
-            # that steals traffic from wlan0.
+            # Restore secondary adapter to unmanaged so NM doesn't add a competing default route
+            # that steals traffic from the primary interface.
             subprocess.run(
                 ['sudo', 'nmcli', 'dev', 'set', secondary, 'managed', 'no'],
                 capture_output=True, text=True, timeout=5
@@ -1779,7 +1779,7 @@ class WiFiManager:
                     self.logger.warning(f"Failed to log disconnection: {db_err}")
             
             # Disconnect using nmcli
-            result = subprocess.run(['nmcli', 'device', 'disconnect', 'wlan0'], 
+            result = subprocess.run(['nmcli', 'device', 'disconnect', self.default_wifi_interface], 
                                   capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0:

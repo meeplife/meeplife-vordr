@@ -41,12 +41,25 @@ EOF
 }
 
 select_station_interface() {
-    # Quick scan for a secondary wlan interface (not wlan0). Never blocks.
-    mapfile -t wlan_ifaces < <(ls /sys/class/net 2>/dev/null | grep -E '^wlan[0-9]+' | sort || true)
-    for iface in "${wlan_ifaces[@]}"; do
-        if [[ "$iface" != "wlan0" ]]; then
-            echo "$iface"
-            return 0
+    # Quick scan for a secondary wireless interface (not the primary one). Never blocks.
+    # Detect primary WiFi interface first
+    local primary_iface
+    primary_iface=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | head -1 | cut -d: -f1)
+    if [ -z "$primary_iface" ]; then
+        for dev in /sys/class/net/*/wireless; do
+            [ -d "$dev" ] && primary_iface=$(basename "$(dirname "$dev")") && break
+        done
+    fi
+    primary_iface="${primary_iface:-wlan0}"
+    
+    # Look for any other wireless interface
+    for dev in /sys/class/net/*/wireless; do
+        if [ -d "$dev" ]; then
+            local iface=$(basename "$(dirname "$dev")")
+            if [ "$iface" != "$primary_iface" ]; then
+                echo "$iface"
+                return 0
+            fi
         fi
     done
     # No adapter found - default to wlan1, pwnagotchi will use it when plugged in

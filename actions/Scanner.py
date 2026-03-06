@@ -21,8 +21,30 @@ def check_requirements():
         print("Install with: sudo apt install nmap arp-scan")
         sys.exit(1)
 
-def run_arp_scan(interface='eth0'):
+def _detect_default_interface():
+    """Auto-detect the best network interface for scanning."""
+    try:
+        # Try to import Ragnar's detection helpers
+        import sys, os
+        parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+        from wifi_interfaces import detect_default_wifi_interface, detect_default_ethernet_interface
+        # Prefer ethernet for scanning
+        eth = detect_default_ethernet_interface()
+        if os.path.exists(f'/sys/class/net/{eth}'):
+            return eth
+        wifi = detect_default_wifi_interface()
+        if os.path.exists(f'/sys/class/net/{wifi}'):
+            return wifi
+    except Exception:
+        pass
+    return 'eth0'
+
+def run_arp_scan(interface=None):
     """Run ARP scan to discover devices on local network"""
+    if interface is None:
+        interface = _detect_default_interface()
     print(f"[*] Running ARP scan on interface {interface}...")
     
     try:
@@ -111,8 +133,10 @@ def run_nmap_scan(ip_address, port_range='1-1000'):
         print(f"[!] Error scanning {ip_address}: {e}")
         return {'hostname': 'Error', 'ports': []}
 
-def scan_network(interface='eth0', port_range='1-1000', quick=False):
+def scan_network(interface=None, port_range='1-1000', quick=False):
     """Main function to scan network"""
+    if interface is None:
+        interface = _detect_default_interface()
     
     # Check if running as root
     if subprocess.run(['id', '-u'], capture_output=True, text=True).stdout.strip() != '0':
@@ -180,7 +204,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Network Scanner using ARP and Nmap')
-    parser.add_argument('-i', '--interface', default='eth0', help='Network interface (default: eth0)')
+    parser.add_argument('-i', '--interface', default=None, help='Network interface (auto-detected if omitted)')
     parser.add_argument('-p', '--ports', default='1-1000', help='Port range to scan (default: 1-1000)')
     parser.add_argument('-q', '--quick', action='store_true', help='Quick scan (only common ports)')
     parser.add_argument('-o', '--output', help='Output JSON file')

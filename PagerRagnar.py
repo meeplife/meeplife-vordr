@@ -198,9 +198,10 @@ class PagerRagnar:
             self.shared_data.ragnarstatustext2 = ""
 
     def is_wifi_connected(self):
-        """Check Wi-Fi connectivity (Pager + Pi compatible)."""
+        """Check Wi-Fi connectivity (Pager + Pi + non-Pi compatible)."""
         try:
-            for iface in ['wlan0cli', 'br-lan', 'wlan0', 'eth0']:
+            # Check all likely interface names across platforms
+            for iface in ['wlan0cli', 'br-lan', 'wlan0', 'eth0', 'wlp2s0', 'enp0s3', 'eno1']:
                 result = subprocess.run(['ip', 'link', 'show', iface],
                                         capture_output=True, text=True, timeout=5)
                 if 'state UP' in result.stdout:

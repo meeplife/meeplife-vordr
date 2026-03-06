@@ -1,7 +1,7 @@
 #!/bin/bash
 # Post-install recovery script for rebuilding the Pwnagotchi monitor interface
 # Usage: sudo ./repair_pwnagotchi_radio.sh [data_iface] [monitor_iface]
-# - data_iface: managed interface feeding monitor mode (defaults to first wlan!=wlan0)
+# - data_iface: managed interface feeding monitor mode (defaults to first wireless != primary)
 # - monitor_iface: monitor alias to recreate (default mon0)
 
 set -euo pipefail
@@ -16,17 +16,29 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 if [[ -z "$DATA_IFACE" ]]; then
-    mapfile -t wlan_ifaces < <(ls /sys/class/net 2>/dev/null | grep -E '^wlan[0-9]+' | sort || true)
-    for iface in "${wlan_ifaces[@]}"; do
-        if [[ "$iface" != "wlan0" ]]; then
-            DATA_IFACE="$iface"
-            break
+    # Detect primary WiFi interface
+    primary_iface=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | head -1 | cut -d: -f1)
+    if [ -z "$primary_iface" ]; then
+        for dev in /sys/class/net/*/wireless; do
+            [ -d "$dev" ] && primary_iface=$(basename "$(dirname "$dev")") && break
+        done
+    fi
+    primary_iface="${primary_iface:-wlan0}"
+    
+    # Find a secondary wireless interface
+    for dev in /sys/class/net/*/wireless; do
+        if [ -d "$dev" ]; then
+            iface=$(basename "$(dirname "$dev")")
+            if [[ "$iface" != "$primary_iface" ]]; then
+                DATA_IFACE="$iface"
+                break
+            fi
         fi
     done
 fi
 
 if [[ -z "$DATA_IFACE" ]]; then
-    echo "[ERROR] Could not automatically determine a wlan interface other than wlan0." >&2
+    echo "[ERROR] Could not automatically determine a wireless interface other than the primary one." >&2
     echo "        Specify it explicitly, e.g. sudo $0 wlan1 mon0" >&2
     exit 1
 fi

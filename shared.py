@@ -680,25 +680,20 @@ class SharedData:
 
 
     def get_raspberry_mac(self):
-        """Get the MAC address of the primary network interface (usually wlan0 or eth0)."""
+        """Get the MAC address of the primary network interface.
+
+        Uses dynamic detection so this works on any Linux device, not
+        just Raspberry Pi with wlan0/eth0.
+        """
         try:
-            # First try wlan0 (wireless interface)
-            result = subprocess.run(['cat', '/sys/class/net/wlan0/address'], 
-                                 capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip().lower()
-            
-            # If wlan0 fails, try eth0 (ethernet interface)
-            result = subprocess.run(['cat', '/sys/class/net/eth0/address'], 
-                                 capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip().lower()
-            
-            logger.warning("Could not find MAC address for wlan0 or eth0")
+            from wifi_interfaces import get_primary_mac_address
+            mac = get_primary_mac_address()
+            if mac:
+                return mac
+            logger.warning("Could not find MAC address for any network interface")
             return None
-            
         except Exception as e:
-            logger.error(f"Error getting Raspberry Pi MAC address: {e}")
+            logger.error(f"Error getting MAC address: {e}")
             return None
 
 
@@ -1284,6 +1279,12 @@ class SharedData:
                 self.save_config()
                 self.load_config()
                 time.sleep(2)
+
+            # Auto-detect network interfaces when the config still has the
+            # hard-coded Raspberry Pi defaults but the interfaces don't exist
+            # on this system (non-Pi hardware like Ryzen mini PCs, OrangePi, etc.)
+            self._auto_detect_interfaces()
+
         except json.JSONDecodeError as e:
             logger.error(f"Configuration file is corrupted or invalid JSON: {e}")
             logger.warning("Recreating configuration file with default values...")
@@ -1291,6 +1292,41 @@ class SharedData:
         except FileNotFoundError:
             logger.error("Error loading configuration: File not found.")
             self.save_config()
+
+    def _auto_detect_interfaces(self):
+        """Replace default wlan0/eth0 interface names with detected ones.
+
+        Only triggers when the configured interfaces don't actually exist on
+        this system, so existing Raspberry Pi setups are unaffected.
+        """
+        if os.name == 'nt':  # Skip on Windows (dev environment)
+            return
+        try:
+            from wifi_interfaces import detect_default_wifi_interface, detect_default_ethernet_interface
+
+            wifi_iface = self.config.get('wifi_default_interface', 'wlan0')
+            eth_iface = self.config.get('ethernet_default_interface', 'eth0')
+            changed = False
+
+            # Only auto-detect if the configured interface doesn't exist
+            if not os.path.exists(f'/sys/class/net/{wifi_iface}'):
+                detected = detect_default_wifi_interface()
+                if detected != wifi_iface:
+                    logger.info(f"WiFi interface '{wifi_iface}' not found — auto-detected '{detected}'")
+                    self.config['wifi_default_interface'] = detected
+                    changed = True
+
+            if not os.path.exists(f'/sys/class/net/{eth_iface}'):
+                detected = detect_default_ethernet_interface()
+                if detected != eth_iface:
+                    logger.info(f"Ethernet interface '{eth_iface}' not found — auto-detected '{detected}'")
+                    self.config['ethernet_default_interface'] = detected
+                    changed = True
+
+            if changed:
+                self.save_config()
+        except Exception as exc:
+            logger.debug(f"Interface auto-detection skipped: {exc}")
 
     def save_config(self):
         """Save the configuration to the shared configuration JSON file."""

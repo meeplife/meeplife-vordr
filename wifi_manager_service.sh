@@ -11,8 +11,36 @@ NC='\033[0m' # No Color
 # Configuration
 HOSTAPD_CONFIG="/tmp/ragnar/hostapd.conf"
 DNSMASQ_CONFIG="/tmp/ragnar/dnsmasq.conf"
-INTERFACE="wlan0"
 AP_IP="192.168.4.1"
+
+# Auto-detect WiFi interface (supports non-Pi hardware with wlp*, wlx* naming)
+INTERFACE=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | head -1 | cut -d: -f1)
+if [ -z "$INTERFACE" ]; then
+    for dev in /sys/class/net/*/wireless; do
+        [ -d "$dev" ] && INTERFACE=$(basename "$(dirname "$dev")") && break
+    done
+fi
+INTERFACE="${INTERFACE:-wlan0}"
+
+# Auto-detect uplink interface (ethernet or second WiFi) for NAT
+detect_uplink_interface() {
+    # Prefer an ethernet interface with a default route
+    local uplink
+    uplink=$(ip route show default 2>/dev/null | grep -oP 'dev \K\S+' | head -1)
+    if [ -n "$uplink" ] && [ "$uplink" != "$INTERFACE" ]; then
+        echo "$uplink"
+        return
+    fi
+    # Fallback: first ethernet-like interface that is UP
+    for dev in /sys/class/net/*; do
+        local name=$(basename "$dev")
+        if [[ "$name" =~ ^(eth[0-9]+|enp[0-9]+s[0-9]+|eno[0-9]+|ens[0-9]+)$ ]] && [ -d "$dev" ]; then
+            echo "$name"
+            return
+        fi
+    done
+    echo "eth0"
+}
 
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -136,33 +164,37 @@ cleanup_ap() {
     print_success "Interface cleanup completed"
 }
 
-# Set up NAT and forwarding rules
+# Set up iptables rules for NAT
 setup_nat() {
     print_status "Setting up NAT rules..."
     
     # Enable IP forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward
     
-    # Set up iptables rules for NAT
-    iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -o wlan1 -j MASQUERADE 2>/dev/null || \
+    # Detect uplink interface for internet sharing
+    local UPLINK
+    UPLINK=$(detect_uplink_interface)
+    
+    # Set up iptables rules for NAT via the detected uplink
+    iptables -t nat -A POSTROUTING -o "$UPLINK" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s 192.168.4.0/24 ! -d 192.168.4.0/24 -j MASQUERADE
     
-    iptables -A FORWARD -i "$INTERFACE" -o eth0 -j ACCEPT 2>/dev/null || \
-    iptables -A FORWARD -i "$INTERFACE" -o wlan1 -j ACCEPT 2>/dev/null || true
+    iptables -A FORWARD -i "$INTERFACE" -o "$UPLINK" -j ACCEPT 2>/dev/null || true
     
     iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
     
-    print_success "NAT rules configured"
+    print_success "NAT rules configured (uplink: $UPLINK)"
 }
 
 # Clean up NAT rules
 cleanup_nat() {
     print_status "Cleaning up NAT rules..."
     
-    # Remove specific rules (this is a simplified cleanup)
-    iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
-    iptables -t nat -D POSTROUTING -o wlan1 -j MASQUERADE 2>/dev/null || true
+    local UPLINK
+    UPLINK=$(detect_uplink_interface)
+    
+    # Remove specific rules
+    iptables -t nat -D POSTROUTING -o "$UPLINK" -j MASQUERADE 2>/dev/null || true
     iptables -t nat -D POSTROUTING -s 192.168.4.0/24 ! -d 192.168.4.0/24 -j MASQUERADE 2>/dev/null || true
     
     print_success "NAT rules cleaned up"

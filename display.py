@@ -401,9 +401,10 @@ class Display:
 
     def get_wifi_signal_strength(self):
         """Return a tuple (signal_dbm, quality_percent) if available."""
-        # Primary method: use `iw dev wlan0 link`
+        wifi_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+        # Primary method: use `iw dev <interface> link`
         try:
-            result = subprocess.run(['iw', 'dev', 'wlan0', 'link'], capture_output=True, text=True, timeout=2)
+            result = subprocess.run(['iw', 'dev', wifi_iface, 'link'], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
                     if 'signal:' in line:
@@ -423,7 +424,7 @@ class Display:
 
         # Fallback: use `iwconfig`
         try:
-            result = subprocess.run(['iwconfig', 'wlan0'], capture_output=True, text=True, timeout=2)
+            result = subprocess.run(['iwconfig', wifi_iface], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 quality = None
                 signal_dbm = None
@@ -513,8 +514,9 @@ class Display:
     def get_wifi_ip_last_octet(self):
         """Get the last octet of the WiFi IP address (e.g., '.211' from '192.168.1.211')."""
         try:
-            # Get IP address of wlan0 interface
-            result = subprocess.run(['ip', '-4', 'addr', 'show', 'wlan0'], 
+            wifi_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+            # Get IP address of WiFi interface
+            result = subprocess.run(['ip', '-4', 'addr', 'show', wifi_iface], 
                                   capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 # Parse the output to find the IP address
@@ -543,7 +545,8 @@ class Display:
                 return True
             
             # Alternative check: see if we're listening on AP interface
-            result = subprocess.run(['ip', 'addr', 'show', 'wlan0'], capture_output=True, text=True)
+            wifi_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+            result = subprocess.run(['ip', 'addr', 'show', wifi_iface], capture_output=True, text=True)
             if result.returncode == 0 and '192.168.4.1' in result.stdout:
                 return True
                 
@@ -565,7 +568,8 @@ class Display:
                     return wifi_mgr.ap_clients_count
             
             # Fallback to hostapd_cli
-            result = subprocess.run(['hostapd_cli', '-i', 'wlan0', 'list_sta'], 
+            wifi_iface = self.shared_data.config.get('wifi_default_interface', 'wlan0')
+            result = subprocess.run(['hostapd_cli', '-i', wifi_iface, 'list_sta'], 
                                   capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 clients = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
@@ -647,7 +651,7 @@ class Display:
             if self.is_ap_mode_active():
                 # Try to get AP client count
                 try:
-                    result = subprocess.run(['hostapd_cli', '-i', 'wlan0', 'list_sta'], 
+                    result = subprocess.run(['hostapd_cli', '-i', self.shared_data.config.get('wifi_default_interface', 'wlan0'), 'list_sta'], 
                                           capture_output=True, text=True, timeout=2)
                     if result.returncode == 0:
                         clients = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]

@@ -133,7 +133,11 @@ SYNC_BACKGROUND_INTERVAL = 15  # seconds between automatic synchronizations (inc
 scan_results_cache = {}
 processed_scan_files = {}  # Track which files we've already processed: {filename: mtime}
 
-DEFAULT_ARP_SCAN_INTERFACE = 'wlan0'
+def _get_default_wifi_interface():
+    """Return the configured default WiFi interface name."""
+    return shared_data.config.get('wifi_default_interface', 'wlan0')
+
+DEFAULT_ARP_SCAN_INTERFACE = _get_default_wifi_interface()
 SEP_SCAN_COMMAND = ['sudo', 'sep-scan']
 MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 PWN_INSTALL_SCRIPT = os.path.join(shared_data.currentdir, 'scripts', 'install_pwnagotchi.sh')
@@ -5365,7 +5369,7 @@ def get_verbose_debug_logs():
         # Test ARP scan directly
         try:
             debug_info['api_traces'].append("=== TESTING ARP SCAN DIRECTLY ===")
-            test_arp_result = run_arp_scan_localnet('wlan0')
+        test_arp_result = run_arp_scan_localnet(_get_default_wifi_interface())
             debug_info['cache_state']['direct_arp_test'] = {
                 'success': bool(test_arp_result),
                 'host_count': len(test_arp_result) if test_arp_result else 0,
@@ -5846,7 +5850,7 @@ def force_arp_scan():
         }
         
         debug_info['steps'].append("Step 1: Running ARP scan...")
-        arp_hosts = run_arp_scan_localnet('wlan0')
+        arp_hosts = run_arp_scan_localnet(_get_default_wifi_interface())
         debug_info['steps'].append(f"Step 2: Found {len(arp_hosts) if arp_hosts else 0} hosts")
         
         if arp_hosts:
@@ -6014,8 +6018,10 @@ def reset_vulnerability_scan_history():
 # REAL-TIME SCANNING ENDPOINTS
 # ============================================================================
 
-def run_arp_scan_localnet(interface='wlan0'):
+def run_arp_scan_localnet(interface=None):
     """Run arp-scan on local network to discover active hosts"""
+    if interface is None:
+        interface = _get_default_wifi_interface()
     command = ['sudo', 'arp-scan', f'--interface={interface}', '--localnet']
     logger.info(f"Running arp-scan localnet: {' '.join(command)}")
     try:
@@ -6112,7 +6118,7 @@ ARP_SCAN_INTERVAL = 60  # seconds
 def get_arp_scan_localnet():
     """Get ARP scan results for local network"""
     try:
-        interface = request.args.get('interface', 'wlan0')
+        interface = request.args.get('interface', _get_default_wifi_interface())
         hosts = run_arp_scan_localnet(interface)
         
         return jsonify({
@@ -6158,7 +6164,7 @@ def get_nmap_ping_scan():
 def get_combined_network_scan():
     """Get combined results from both ARP and nmap scans"""
     try:
-        interface = request.args.get('interface', 'wlan0')
+        interface = request.args.get('interface', _get_default_wifi_interface())
         network = request.args.get('network', '192.168.1.0/24')
         
         # Run both scans
@@ -7805,7 +7811,7 @@ def get_wifi_interfaces():
             'success': False,
             'error': str(e),
             'interfaces': [{
-                'name': 'wlan0',
+                'name': _get_default_wifi_interface(),
                 'state': 'UNKNOWN',
                 'is_default': True,
                 'connected_ssid': None,
@@ -7830,7 +7836,7 @@ def get_wifi_status():
         except Exception as interface_error:
             logger.error(f"Failed to gather Wi-Fi interfaces: {interface_error}")
             interfaces = [{
-                'name': 'wlan0',
+                'name': _get_default_wifi_interface(),
                 'state': 'UNKNOWN',
                 'is_default': True,
                 'connected_ssid': None,
@@ -8558,7 +8564,8 @@ def get_wifi_log():
             
             # Get IP address
             try:
-                result = subprocess.run(['ip', 'addr', 'show', 'wlan0'], capture_output=True, text=True, timeout=3)
+                wifi_iface = _get_default_wifi_interface()
+                result = subprocess.run(['ip', 'addr', 'show', wifi_iface], capture_output=True, text=True, timeout=3)
                 if result.returncode == 0:
                     ip_match = re.search(r'inet (\d+\.\d+\.\d+\.\d+)', result.stdout)
                     wifi_log_data['system_wifi']['ip_address'] = ip_match.group(1) if ip_match else None
@@ -10772,7 +10779,7 @@ def background_arp_scan_loop():
                 
                 def run_arp():
                     nonlocal arp_hosts
-                    arp_hosts = run_arp_scan_localnet('wlan0')
+                    arp_hosts = run_arp_scan_localnet(_get_default_wifi_interface())
                 
                 arp_thread = threading.Thread(target=run_arp, daemon=True)
                 arp_thread.start()

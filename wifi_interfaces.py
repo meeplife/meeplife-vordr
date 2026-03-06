@@ -407,3 +407,101 @@ def gather_all_network_interfaces(wifi_default: str = 'wlan0', ethernet_default:
         'wifi': gather_wifi_interfaces(wifi_default),
         'ethernet': gather_ethernet_interfaces(ethernet_default),
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection helpers — pick the best available interface dynamically
+# so Ragnar works on non-Raspberry Pi hardware where interface names
+# differ (e.g. wlp2s0, enp3s0, wlx...).
+# ---------------------------------------------------------------------------
+
+def detect_default_wifi_interface() -> str:
+    """Return the name of the best available WiFi interface.
+
+    Selection priority:
+    1. A connected WiFi interface (has an IP and is up).
+    2. The first WiFi interface that is UP (even if not connected).
+    3. The first WiFi interface found.
+    4. Fallback to ``wlan0`` when nothing is detected.
+    """
+    interfaces = gather_wifi_interfaces('wlan0')
+    if not interfaces:
+        return 'wlan0'
+
+    # Prefer a connected interface
+    for iface in interfaces:
+        if iface.get('connected') and iface.get('ip_address'):
+            return iface['name']
+
+    # Prefer an interface that is UP
+    for iface in interfaces:
+        state = (iface.get('state') or '').upper()
+        if state in ('UP', 'CONNECTED'):
+            return iface['name']
+
+    # Return whatever is available
+    return interfaces[0]['name']
+
+
+def detect_default_ethernet_interface() -> str:
+    """Return the name of the best available Ethernet interface.
+
+    Selection priority:
+    1. A connected Ethernet interface with carrier and valid IP.
+    2. An Ethernet interface with carrier (cable plugged in).
+    3. The first Ethernet interface found.
+    4. Fallback to ``eth0`` when nothing is detected.
+    """
+    interfaces = gather_ethernet_interfaces('eth0')
+    if not interfaces:
+        return 'eth0'
+
+    for iface in interfaces:
+        if iface.get('connected') and iface.get('has_carrier') and iface.get('ip_address') and not iface.get('is_link_local'):
+            return iface['name']
+
+    for iface in interfaces:
+        if iface.get('has_carrier'):
+            return iface['name']
+
+    return interfaces[0]['name']
+
+
+def get_primary_mac_address() -> Optional[str]:
+    """Return the MAC address of the first available network interface.
+
+    Tries WiFi interfaces first, then Ethernet.  Returns ``None`` when no
+    interface can be read.
+    """
+    # Try WiFi
+    wifi_interfaces = gather_wifi_interfaces('wlan0')
+    for iface in wifi_interfaces:
+        mac = iface.get('mac_address')
+        if mac:
+            return mac.lower()
+
+    # Try reading from sysfs for the detected WiFi interface
+    wifi_name = detect_default_wifi_interface()
+    try:
+        result = subprocess.run(
+            ['cat', f'/sys/class/net/{wifi_name}/address'],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().lower()
+    except Exception:
+        pass
+
+    # Try Ethernet
+    eth_name = detect_default_ethernet_interface()
+    try:
+        result = subprocess.run(
+            ['cat', f'/sys/class/net/{eth_name}/address'],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().lower()
+    except Exception:
+        pass
+
+    return None

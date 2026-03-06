@@ -255,8 +255,8 @@ class TrafficAnalyzer:
         except Exception as e:
             logger.debug(f"Interface detection error: {e}")
         
-        # Fallback to common interfaces
-        for iface in ['eth0', 'wlan0', 'enp0s3', 'ens33']:
+        # Fallback to common interfaces (covers both Pi and non-Pi naming)
+        for iface in ['eth0', 'wlan0', 'enp0s3', 'ens33', 'wlp2s0', 'eno1']:
             if os.path.exists(f'/sys/class/net/{iface}'):
                 return iface
         

@@ -35,7 +35,12 @@ manage_wifi_connections() {
 
         # Create a new connection named after the SSID with priority 5
         log "INFO" "Creating new Wi-Fi connection for SSID: $SSID with priority 5"
-        if nmcli connection add type wifi ifname wlan0 con-name "$SSID" ssid "$SSID" \
+        # Auto-detect WiFi interface for nmcli
+        local wifi_iface
+        wifi_iface=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | head -1 | cut -d: -f1)
+        wifi_iface="${wifi_iface:-wlan0}"
+
+        if nmcli connection add type wifi ifname "$wifi_iface" con-name "$SSID" ssid "$SSID" \
             wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PSK" connection.autoconnect yes \
             connection.autoconnect-priority 5 >> "$LOG_FILE" 2>&1; then
             log "SUCCESS" "Created new Wi-Fi connection for SSID: $SSID"

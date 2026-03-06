@@ -316,12 +316,31 @@ check_system_compatibility() {
 check_internet() {
     log "INFO" "Checking internet connectivity..."
     
-    # Try to ping common servers
-    if ping -c 2 8.8.8.8 > /dev/null 2>&1 || ping -c 2 1.1.1.1 > /dev/null 2>&1; then
+    # Use multiple methods — ping can be blocked by firewall on some systems.
+    # Method 1: Try curl/wget to actually download something (most reliable)
+    local have_internet=false
+    if command -v curl >/dev/null 2>&1; then
+        if curl -s --max-time 10 --head https://pypi.org >/dev/null 2>&1; then
+            have_internet=true
+        fi
+    fi
+    if [ "$have_internet" = false ] && command -v wget >/dev/null 2>&1; then
+        if wget -q --spider --timeout=10 https://pypi.org 2>/dev/null; then
+            have_internet=true
+        fi
+    fi
+    # Method 2: Fallback to ping (may fail on restrictive networks)
+    if [ "$have_internet" = false ]; then
+        if ping -c 2 -W 5 8.8.8.8 > /dev/null 2>&1 || ping -c 2 -W 5 1.1.1.1 > /dev/null 2>&1; then
+            have_internet=true
+        fi
+    fi
+
+    if [ "$have_internet" = true ]; then
         log "SUCCESS" "Internet connectivity confirmed"
         
         # Test DNS resolution
-        if ping -c 1 pypi.org > /dev/null 2>&1; then
+        if ping -c 1 -W 5 pypi.org > /dev/null 2>&1 || host pypi.org > /dev/null 2>&1; then
             log "SUCCESS" "DNS resolution working"
         else
             log "WARNING" "DNS resolution issues detected. Package installation may be slow."
@@ -332,9 +351,11 @@ check_internet() {
         log "WARNING" "No internet connectivity detected!"
         echo -e "${YELLOW}Internet connection is required to download Python packages.${NC}"
         echo -e "${YELLOW}Please check your network connection and try again.${NC}"
+        echo -e "${YELLOW}NOTE: On some systems ping is blocked by firewall. If you know${NC}"
+        echo -e "${YELLOW}you have a working connection, choose option 1 to continue.${NC}"
         echo -e "\nDo you want to:"
-        echo "1. Continue anyway (installation may fail)"
-        echo "2. Exit and fix network issues first (recommended)"
+        echo "1. Continue anyway (installation may still succeed)"
+        echo "2. Exit and fix network issues first"
         read -r choice
         case $choice in
             1) 
@@ -603,16 +624,26 @@ configure_interfaces() {
 setup_ragnar() {
     log "INFO" "Setting up ragnar..."
 
-    # Use PiWheels for faster installs on Raspberry Pi architectures
+    # Use PiWheels for faster installs on Raspberry Pi (ARM) architectures
+    # PiWheels hosts pre-compiled wheels specifically for Raspberry Pi OS.
+    # On other ARM boards (OrangePi, etc.) the standard PyPI index is preferred.
     local machine_arch
     machine_arch=$(uname -m 2>/dev/null || echo "")
-    if [[ "$machine_arch" == "armv7l" || "$machine_arch" == "armv6l" || "$machine_arch" == "aarch64" || "$machine_arch" == "arm64" ]]; then
+    local is_raspberry_pi=false
+    if [ -f /proc/device-tree/model ] && grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
+        is_raspberry_pi=true
+    elif [ -f /proc/cpuinfo ] && grep -qi "raspberry" /proc/cpuinfo 2>/dev/null; then
+        is_raspberry_pi=true
+    fi
+    if [[ "$is_raspberry_pi" == "true" && ("$machine_arch" == "armv7l" || "$machine_arch" == "armv6l" || "$machine_arch" == "aarch64" || "$machine_arch" == "arm64") ]]; then
         if [ -z "${PIP_EXTRA_INDEX_URL:-}" ]; then
             export PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
         else
             export PIP_EXTRA_INDEX_URL="$PIP_EXTRA_INDEX_URL https://www.piwheels.org/simple"
         fi
-        log "INFO" "Using PiWheels Python package index for ${machine_arch}"
+        log "INFO" "Using PiWheels Python package index for Raspberry Pi (${machine_arch})"
+    elif [[ "$machine_arch" == "armv7l" || "$machine_arch" == "armv6l" || "$machine_arch" == "aarch64" || "$machine_arch" == "arm64" ]]; then
+        log "INFO" "ARM architecture (${machine_arch}) detected but not Raspberry Pi — skipping PiWheels"
     fi
 
     # Create ragnar user if it doesn't exist
@@ -1041,8 +1072,18 @@ wifi.scan-rand-mac-address=no
 wifi.cloned-mac-address=preserve
 EOF
 
-    # Ensure NetworkManager manages wlan0
-    nmcli dev set wlan0 managed yes 2>/dev/null || log "WARNING" "Could not set wlan0 to managed (interface may not exist yet)"
+    # Ensure NetworkManager manages all WiFi interfaces (auto-detect, not just wlan0)
+    local wifi_ifaces
+    wifi_ifaces=$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | grep ':wifi$' | cut -d: -f1)
+    if [ -n "$wifi_ifaces" ]; then
+        while IFS= read -r iface; do
+            nmcli dev set "$iface" managed yes 2>/dev/null && \
+                log "SUCCESS" "Set WiFi interface $iface to managed" || \
+                log "WARNING" "Could not set $iface to managed"
+        done <<< "$wifi_ifaces"
+    else
+        log "WARNING" "No WiFi interfaces detected by NetworkManager (they may appear after reboot)"
+    fi
     
     # Enable and start services
     systemctl daemon-reload
