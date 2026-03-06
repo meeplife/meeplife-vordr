@@ -25,6 +25,8 @@ class PushoverService:
         self._last_notified_vuln_count = 0  # last count we sent a vuln alert for
         self._notified_creds = 0         # last known cred count
         self._last_send_ts = 0.0         # rate-limit: min 2 s between sends
+        self._startup_ts = time.time()   # suppress device notifications shortly after restart
+        self._startup_grace_s = 90       # seconds to wait before sending device alerts
         self._load_known_state_from_db()
 
     # ------------------------------------------------------------------
@@ -149,6 +151,10 @@ class PushoverService:
     # Event helpers (called from webapp update loop)
     # ------------------------------------------------------------------
 
+    def _in_startup_grace(self):
+        """Return True if still within the post-restart grace period."""
+        return (time.time() - self._startup_ts) < self._startup_grace_s
+
     def notify_new_devices(self, new_ips):
         """Notify about devices that have NEVER been seen before (deduped against DB)."""
         if not self.is_enabled():
@@ -159,6 +165,10 @@ class PushoverService:
         if not truly_new:
             return
         self._notified_devices.update(truly_new)
+        # Suppress notification during startup grace period — just record the IPs
+        if self._in_startup_grace():
+            logger.debug(f"Pushover: suppressed new-device alert for {len(truly_new)} IP(s) during startup grace")
+            return
         count = len(truly_new)
         ip_list = ", ".join(sorted(truly_new)[:5])
         suffix = f" (+{count - 5} more)" if count > 5 else ""
@@ -171,6 +181,9 @@ class PushoverService:
             return
         # Always track offline state even if notifications are disabled, so back-online works
         self._offline_devices.update(lost_ips)
+        if self._in_startup_grace():
+            logger.debug(f"Pushover: suppressed device-lost alert for {len(lost_ips)} IP(s) during startup grace")
+            return
         if not self.shared_data.config.get("pushover_notify_device_lost", False):
             return
         if not lost_ips:
