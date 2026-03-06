@@ -224,6 +224,10 @@ class PushoverService:
                 return
             delta = new_total - self._last_notified_vuln_count
             self._last_notified_vuln_count = new_total
+        # Suppress notification during startup grace — just absorb the baseline
+        if self._in_startup_grace():
+            logger.debug(f"Pushover: suppressed vuln alert (delta={delta}) during startup grace")
+            return
         msg = f"🔥 {delta} new vulnerability/vulnerabilities found! (total: {new_total})"
         threading.Thread(target=self.send, args=(msg, "Ragnar — Vulnerability Alert", 1), daemon=True).start()
 
@@ -238,5 +242,9 @@ class PushoverService:
         if total == self._notified_creds:
             return
         self._notified_creds = total
+        # Suppress notification during startup grace — just absorb the baseline
+        if self._in_startup_grace():
+            logger.debug(f"Pushover: suppressed credential alert during startup grace")
+            return
         msg = f"🗝️ {new_count} new credential(s) captured! (total: {total})"
         threading.Thread(target=self.send, args=(msg, "Ragnar — Credentials"), daemon=True).start()
