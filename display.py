@@ -1163,8 +1163,210 @@ class Display:
             ]
             self._draw_stat_rows(draw, y, stats)
 
+    # ------------------------------------------------------------------
+    # GC9A01 round-display renderer
+    # ------------------------------------------------------------------
+
+    def _run_gc9a01(self):
+        """Dedicated render loop for the GC9A01 1.28″ round colour TFT.
+
+        Runs instead of the normal e-paper loop when epd_type == 'gc9a01'.
+        Builds a 240×240 RGB image every loop iteration, but only pushes a
+        new frame to the display when the visible content has changed, keeping
+        the screen completely stable between updates.
+
+        Layout (240×240 circle):
+          ┌──────────────────────┐
+          │     RAGNAR  (title)  │  y≈10 – white, Viking font
+          │   ┌──────────────┐   │
+          │   │  mascot PNG  │   │  y≈30 – 140×140, white→transparent
+          │   └──────────────┘   │
+          │   ── STATUS TEXT ──  │  y≈185 – coloured by state
+          │      wifi ssid       │  y≈210 – white/dim
+          └──────────────────────┘
+        Outer ring colour: green=connected, amber=AP mode, red=alert, dim=idle
+        """
+        from PIL import Image as _Image, ImageDraw as _ImageDraw, ImageFont as _ImageFont
+
+        SIZE = 240
+
+        # Colour palette (R, G, B)
+        C_BG      = (0,   0,   0)
+        C_WHITE   = (255, 255, 255)
+        C_GRAY    = (160, 160, 160)
+        C_GREEN   = (50,  200, 80)
+        C_RED     = (220, 50,  50)
+        C_CYAN    = (0,   200, 220)
+        C_AMBER   = (220, 160, 0)
+        C_RING_DIM= (40,  40,  40)
+        RING_W    = 6           # ring border width in px
+
+        fonts_dir = os.path.join(os.path.dirname(__file__), "resources", "fonts")
+        if not os.path.isdir(fonts_dir):
+            fonts_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "resources", "fonts"
+            )
+        arial_path  = os.path.join(fonts_dir, "Arial.ttf")
+        viking_path = os.path.join(fonts_dir, "Creamy.ttf")
+
+        try:
+            font_title  = _ImageFont.truetype(viking_path, 22)
+            font_status = _ImageFont.truetype(arial_path,  18)
+            font_ssid   = _ImageFont.truetype(arial_path,  14)
+        except Exception:
+            font_title  = _ImageFont.load_default()
+            font_status = font_title
+            font_ssid   = font_title
+
+        # ── mascot ──────────────────────────────────────────────────────
+        mascot_size = (140, 140)
+        mascot_img  = None
+        mascot_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "web", "images", "ragnar.png"
+        )
+        if os.path.isfile(mascot_path):
+            try:
+                raw = _Image.open(mascot_path).convert("RGBA")
+                raw.thumbnail(mascot_size, _Image.LANCZOS)
+                # Make white and near-white pixels transparent
+                pixels = raw.load()
+                for y in range(raw.height):
+                    for x in range(raw.width):
+                        r, g, b, a = pixels[x, y]
+                        if r > 200 and g > 200 and b > 200:
+                            pixels[x, y] = (r, g, b, 0)
+                mascot_img = raw
+            except Exception as exc:
+                logger.warning("GC9A01: could not load mascot: %s", exc)
+
+        def _state_tuple():
+            sd = self.shared_data
+            return (
+                getattr(sd, "wifi_connected",    False),
+                getattr(sd, "current_ssid",      ""),
+                getattr(sd, "ap_mode_active",    False),
+                getattr(sd, "ragnarstatustext",  "IDLE"),
+            )
+
+        def _ring_colour(wifi_on, ap_on, status):
+            if ap_on:
+                return C_AMBER
+            if not wifi_on:
+                return C_RED
+            s = (status or "").upper()
+            if any(k in s for k in ("SCAN", "ATTACK", "INJECT")):
+                return C_CYAN
+            if "ERROR" in s or "FAIL" in s:
+                return C_RED
+            return C_GREEN
+
+        def _status_colour(wifi_on, ap_on, status):
+            if ap_on:
+                return C_AMBER
+            if not wifi_on:
+                return C_RED
+            s = (status or "").upper()
+            if any(k in s for k in ("SCAN", "ATTACK", "INJECT")):
+                return C_CYAN
+            if "ERROR" in s or "FAIL" in s:
+                return C_RED
+            return C_GREEN
+
+        def _render_frame(wifi_on, ssid, ap_on, status_text):
+            img  = _Image.new("RGB", (SIZE, SIZE), C_BG)
+            draw = _ImageDraw.Draw(img)
+
+            # Circular clip mask
+            mask = _Image.new("L", (SIZE, SIZE), 0)
+            _ImageDraw.Draw(mask).ellipse((0, 0, SIZE - 1, SIZE - 1), fill=255)
+
+            # Coloured ring border
+            ring_c = _ring_colour(wifi_on, ap_on, status_text)
+            draw.ellipse((0, 0, SIZE - 1, SIZE - 1), outline=ring_c, width=RING_W)
+
+            # Title
+            title = "RAGNAR"
+            try:
+                tb = font_title.getbbox(title)
+                tx = (SIZE - (tb[2] - tb[0])) // 2
+            except Exception:
+                tx = 80
+            draw.text((tx, 8), title, font=font_title, fill=C_WHITE)
+
+            # Mascot — centred between y=32 and y=172
+            if mascot_img is not None:
+                mw, mh = mascot_img.size
+                mx = (SIZE - mw) // 2
+                my = 32 + (140 - mh) // 2
+                img.paste(mascot_img, (mx, my), mascot_img)
+
+            # Status text
+            s_col = _status_colour(wifi_on, ap_on, status_text)
+            st    = (status_text or "IDLE").upper()
+            try:
+                sb = font_status.getbbox(st)
+                sx = (SIZE - (sb[2] - sb[0])) // 2
+            except Exception:
+                sx = 60
+            draw.text((sx, 182), st, font=font_status, fill=s_col)
+
+            # SSID / AP label
+            if ap_on:
+                net_label = "AP MODE"
+                net_col   = C_AMBER
+            elif ssid:
+                net_label = ssid
+                net_col   = C_GRAY
+            else:
+                net_label = "NOT CONNECTED"
+                net_col   = C_RED
+            try:
+                nb = font_ssid.getbbox(net_label)
+                nx = (SIZE - (nb[2] - nb[0])) // 2
+            except Exception:
+                nx = 60
+            draw.text((nx, 208), net_label, font=font_ssid, fill=net_col)
+
+            # Apply circular clip so corners are pure black
+            result = _Image.new("RGB", (SIZE, SIZE), C_BG)
+            result.paste(img, mask=mask)
+            return result
+
+        self.epd_helper.init_partial_update()
+        _last_state = None
+
+        while not self.shared_data.display_should_exit:
+            try:
+                state = _state_tuple()
+                if state != _last_state:
+                    wifi_on, ssid, ap_on, status_text = state
+                    frame = _render_frame(wifi_on, ssid, ap_on, status_text)
+                    self.epd_helper.display_partial(frame)
+                    _last_state = state
+
+                    # Save web preview
+                    try:
+                        web_path = os.path.join(
+                            self.shared_data.webdir, "screen.png"
+                        )
+                        with open(web_path, "wb") as f:
+                            frame.save(f)
+                            f.flush()
+                            os.fsync(f.fileno())
+                    except Exception as exc:
+                        logger.debug("GC9A01: web screen save failed: %s", exc)
+
+            except Exception as exc:
+                logger.error("GC9A01 render error: %s", exc)
+
+            time.sleep(self.shared_data.screen_delay)
+
     def run(self):
         """Main loop for updating the EPD display with shared data."""
+        if self.config.get("epd_type") == "gc9a01":
+            self._run_gc9a01()
+            return
+
         # Wait for deferred initialization (fonts, images) to finish
         # before attempting to render anything.
         if hasattr(self.shared_data, 'wait_for_deferred_init'):

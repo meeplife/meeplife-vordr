@@ -52,7 +52,14 @@ class EPD:
     # ------------------------------------------------------------------
 
     def init(self, *args):
-        """Initialise SPI, GPIO and the GC9A01 controller."""
+        """Initialise SPI, GPIO and the GC9A01 controller.
+
+        This is called every display loop iteration for e-Paper partial-update
+        compatibility.  We only run the full hardware setup + reset sequence
+        once to avoid the blank flash that a reset causes on every frame.
+        """
+        if self._initialized:
+            return  # Already running — skip reset/reinit entirely
         self._setup_hardware()
         self._reset()
         self._send_init_sequence()
