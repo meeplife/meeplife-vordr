@@ -130,6 +130,12 @@ class EPD:
     # ------------------------------------------------------------------
 
     def _setup_hardware(self):
+        if self._spi is not None:
+            # Already initialised — don't try to reclaim GPIO pins that are
+            # still held by gpiozero from the first call.  init() is called
+            # every display loop iteration (for e-Paper partial update compat)
+            # so we must guard against double-setup here.
+            return
         try:
             import spidev
             import gpiozero
