@@ -309,6 +309,10 @@ const configMetadata = {
         label: "EPD Type",
         description: "Model identifier for the connected Waveshare e-paper display."
     },
+    gc9a01_mascot_color: {
+        label: "GC9A01 Mascot Tint Color",
+        description: "Tint color applied to the animated mascot on the GC9A01 1.28\" round TFT display. Only visible when GC9A01 is selected."
+    },
     portlist: {
         label: "Additional Ports",
         description: "Comma separated list of extra ports to check on every host in addition to the sequential range."
@@ -9412,13 +9416,14 @@ function displayConfigForm(config) {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Network': ['network_max_failed_pings'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
-        'Display': ['epd_type', 'screen_reversed']
+        'Display': ['epd_type', 'screen_reversed', 'gc9a01_mascot_color']
     };
     
     const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
-    const alwaysShowKeys = new Set(['network_max_failed_pings']);
+    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color']);
     const fallbackValues = {
-        network_max_failed_pings: 15
+        network_max_failed_pings: 15,
+        gc9a01_mascot_color: '#96C8FF'
     };
     const checkboxHandlers = {
         scan_vuln_running: 'handleVulnScanToggle(this)',
@@ -9486,6 +9491,21 @@ function displayConfigForm(config) {
                             </span>
                         </label>
                     `;
+                } else if (key === 'gc9a01_mascot_color') {
+                    const colorVal = (value && typeof value === 'string' && value.startsWith('#')) ? value : '#96C8FF';
+                    html += `
+                        <div class="space-y-2" id="cfg-gc9a01-color-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <div class="flex items-center gap-3">
+                                <input type="color" name="${key}" value="${colorVal}"
+                                       class="h-9 w-16 cursor-pointer rounded border border-slate-600 bg-slate-700 p-1">
+                                <span class="text-xs text-gray-500">Mascot tint on GC9A01 round display</span>
+                            </div>
+                        </div>
+                    `;
                 } else {
                     html += `
                         <div class="space-y-2">
@@ -9517,6 +9537,18 @@ function displayConfigForm(config) {
         e.preventDefault();
         await saveConfig(e.target);
     });
+
+    // Show/hide GC9A01 colour row based on selected display type
+    const epdSelect = document.querySelector('select[name="epd_type"]');
+    const colorRow = document.getElementById('cfg-gc9a01-color-row');
+    function syncGc9a01ColorRow() {
+        if (!colorRow || !epdSelect) return;
+        colorRow.style.display = (epdSelect.value === '1in28_tft') ? '' : 'none';
+    }
+    if (epdSelect) {
+        epdSelect.addEventListener('change', syncGc9a01ColorRow);
+        syncGc9a01ColorRow();
+    }
 
     const attacksEnabled = config.hasOwnProperty('enable_attacks') ? Boolean(config.enable_attacks) : true;
     updateAttackWarningBanner(attacksEnabled);
