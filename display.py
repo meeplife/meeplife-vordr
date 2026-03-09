@@ -1559,75 +1559,90 @@ class Display:
         font_hdr  = _load_font(10)   # header bar text
         font_body = _load_font(9)    # all other lines
 
-        _info_tick   = 0
-        _png_counter = 0
+        _info_tick    = 0
+        _png_counter  = 0
+        _scroll_pos   = 0   # pixel offset for header scroll
+
+        # Width (px) available in the header beside "RAGNAR " prefix
+        _RAGNAR_LABEL = "RAGNAR "
+        try:
+            _ragnar_w = font_hdr.getbbox(_RAGNAR_LABEL)[2]
+        except Exception:
+            _ragnar_w = len(_RAGNAR_LABEL) * 6
+        _HDR_STATUS_W = W - _ragnar_w - 2   # pixels available for scrolling status
+
+        # ── WiFi helper (same method used by gc9a01) ─────────────────────
+        def _get_wifi():
+            """Return (connected: bool, ssid: str, ip: str)."""
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["iwgetid", "-r"], capture_output=True, text=True, timeout=2
+                )
+                ssid = result.stdout.strip()
+                if ssid:
+                    # Get IP from shared_data
+                    ip = getattr(self.shared_data, "ipaddress", "") or ""
+                    return True, ssid, ip
+            except Exception:
+                pass
+            if getattr(self.shared_data, "ap_enabled", False):
+                return True, "AP MODE", getattr(self.shared_data, "ipaddress", "") or ""
+            return False, "", getattr(self.shared_data, "ipaddress", "") or ""
 
         # ── Render helper ───────────────────────────────────────────────
-        def _render():
+        def _render(scroll_px):
             sd = self.shared_data
 
             # --- collect data --------------------------------------------------
             orch_status = (getattr(sd, "ragnarorch_status", "IDLE") or "IDLE").upper()
-            # Truncate status to ~10 chars with ellipsis
-            status_str = orch_status if len(orch_status) <= 10 else orch_status[:9] + "\u2026"
-
-            wifi_on = getattr(sd, "wifi_enabled", False)
-            ssid    = getattr(sd, "wifi_network", "") or ""
-            ap_on   = getattr(sd, "ap_enabled", False)
-            ip      = getattr(sd, "ipaddress", "") or ""
-            gw_info = getattr(sd, "gateway_info", {}) or {}
-            gateway = gw_info.get("gateway_ip", "") if isinstance(gw_info, dict) else ""
+            wifi_on, ssid, ip = _get_wifi()
 
             targets = getattr(sd, "total_targetnbr", 0) or 0
             creds   = getattr(sd, "crednbr",        0) or 0
             vulns   = getattr(sd, "vulnnbr",         0) or 0
 
-            status2 = getattr(sd, "bjornstatustext2", "") or ""
+            status2 = (getattr(sd, "bjornstatustext2", "") or "").strip()
 
             # --- layout strings ------------------------------------------------
-            if wifi_on or ap_on:
-                wifi_line = "WiFi: {}".format(ssid[:16]) if ssid else "WiFi: connected"
-            else:
-                wifi_line = "NOT CONNECTED"
+            wifi_line    = ("WiFi: " + ssid[:18]) if wifi_on else "NOT CONNECTED"
+            target_line  = (">" + status2[:20]) if status2 else ("IP: " + ip if ip else "Scanning...")
+            counter_line = "TRGTS:{}  CREDS:{}  VULNS:{}".format(targets, creds, vulns)
 
-            if ip:
-                ip_line = ip
-            elif gateway:
-                ip_line = gateway
-            else:
-                ip_line = "---"
-
-            counter_line = "T:{}  C:{}  V:{}".format(targets, creds, vulns)
-
-            # Ticker: 10 s per slot (20 ticks at 0.5 s), 2 slots
+            # Ticker: 10 s per slot (20 ticks), 2 slots
             slot = (_info_tick // 20) % 2
-            if slot == 0:
-                ticker_line = status2 if status2 else (gateway or "Scanning...")
-            else:
-                ticker_line = ("SSID: " + ssid) if ssid else "SSID: none"
+            ticker_line = status2[:24] if slot == 0 and status2 else ("WiFi: " + ssid if ssid else ip or "---")
 
             # --- draw ----------------------------------------------------------
-            img  = _Image.new("1", (W, H), 0)   # black background
+            img  = _Image.new("1", (W, H), 0)
             draw = _ImageDraw.Draw(img)
 
-            # Header bar: white rectangle (0,0) → (127,12)
+            # Header bar: white filled rectangle
             draw.rectangle((0, 0, W - 1, 12), fill=255)
-            draw.text((2, 1),    "RAGNAR",    font=font_hdr, fill=0)
+            draw.text((2, 1), _RAGNAR_LABEL, font=font_hdr, fill=0)
 
-            # Right-align status in header
+            # Scrolling status text clipped to right portion of header
+            # Build scroll string with padding so it wraps smoothly
+            scroll_str = orch_status + "   "
             try:
-                bbox   = draw.textbbox((0, 0), status_str, font=font_hdr)
-                txt_w  = bbox[2] - bbox[0]
-            except AttributeError:
-                txt_w  = len(status_str) * 6   # fallback estimate
-            draw.text((W - txt_w - 2, 1), status_str, font=font_hdr, fill=0)
+                full_w = font_hdr.getbbox(scroll_str)[2]
+            except Exception:
+                full_w = len(scroll_str) * 6
+            # Render into a temp image and paste a window of it
+            tmp = _Image.new("1", (max(full_w * 2, _HDR_STATUS_W + 4), 12), 255)
+            tdraw = _ImageDraw.Draw(tmp)
+            tdraw.text((0, 1),        scroll_str, font=font_hdr, fill=0)
+            tdraw.text((full_w, 1),   scroll_str, font=font_hdr, fill=0)
+            offset = scroll_px % full_w
+            crop   = tmp.crop((offset, 0, offset + _HDR_STATUS_W, 12))
+            img.paste(crop, (_ragnar_w, 0))
 
             # Thin divider line at y=13
             draw.line((0, 13, W - 1, 13), fill=255)
 
             # Body lines
             draw.text((0, 15), wifi_line,    font=font_body, fill=255)
-            draw.text((0, 25), ip_line,      font=font_body, fill=255)
+            draw.text((0, 25), target_line,  font=font_body, fill=255)
             draw.text((0, 35), counter_line, font=font_body, fill=255)
 
             # Thin separator at y=45
@@ -1642,11 +1657,12 @@ class Display:
         while not self.shared_data.display_should_exit:
             try:
                 self.shared_data.update_ragnarstatus()
-                img = _render()
+                img = _render(_scroll_pos)
                 epd.init()
                 buf = epd.getbuffer(img)
                 epd.displayPartial(buf)
-                _info_tick += 1
+                _info_tick  += 1
+                _scroll_pos += 2   # advance scroll 2px per tick (0.5s → ~4px/s)
 
                 # Save screen.png for web preview every PNG_EVERY ticks
                 _png_counter += 1
