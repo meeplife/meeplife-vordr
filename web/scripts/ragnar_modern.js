@@ -5536,6 +5536,31 @@ async function rebootSystem() {
     }
 }
 
+async function shutdownSystem() {
+    if (!confirm('⚠️ This will STOP the Ragnar service and SHUT DOWN the system.\n\nThe device will be completely powered off and must be manually restarted.\n\nContinue?')) {
+        return;
+    }
+    
+    try {
+        addConsoleMessage('Initiating system shutdown...', 'warning');
+        
+        const data = await postAPI('/api/system/shutdown', {});
+        
+        if (data.success) {
+            addConsoleMessage('System shutdown initiated', 'success');
+            addConsoleMessage('Device will power off shortly...', 'warning');
+            
+            updateConnectionStatus(false);
+        } else {
+            addConsoleMessage(`Shutdown failed: ${data.error || 'Unknown error'}`, 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error shutting down system:', error);
+        addConsoleMessage('Failed to initiate system shutdown', 'error');
+    }
+}
+
 // ============================================================================
 // DATA MANAGEMENT FUNCTIONS
 // ============================================================================

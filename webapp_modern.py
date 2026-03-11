@@ -7632,6 +7632,33 @@ def reboot_system():
         logger.error(f"Error rebooting system: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/system/shutdown', methods=['POST'])
+def shutdown_system():
+    """Stop Ragnar service and shut down the system"""
+    try:
+        import subprocess
+
+        def shutdown_delayed():
+            import time
+            time.sleep(3)  # Give time for response to be sent
+            try:
+                subprocess.run(['sudo', 'systemctl', 'stop', 'ragnar'], check=False)
+                subprocess.run(['sudo', 'shutdown', 'now'], check=True)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to shut down system: {e}")
+
+        import threading
+        threading.Thread(target=shutdown_delayed, daemon=True).start()
+
+        return jsonify({
+            'success': True,
+            'message': 'System shutdown initiated'
+        })
+
+    except Exception as e:
+        logger.error(f"Error shutting down system: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # ============================================================================
 # DATA MANAGEMENT ENDPOINTS
 # ============================================================================
