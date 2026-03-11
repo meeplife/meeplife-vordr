@@ -1541,7 +1541,8 @@ class Display:
 
         # ── Initialise display ──────────────────────────────────────────
         from resources.waveshare_epd import ssd1306 as _ssd1306_mod
-        i2c_addr = int(self.config.get("ssd1306_i2c_address", "0x3C"), 16)
+        _i2c_raw = self.config.get("ssd1306_i2c_address", "0x3C")
+        i2c_addr = int(_i2c_raw, 16) if isinstance(_i2c_raw, str) else int(_i2c_raw)
         epd = _ssd1306_mod.EPD(i2c_address=i2c_addr)
         epd.init()
 
