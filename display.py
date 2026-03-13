@@ -1695,7 +1695,7 @@ class Display:
         brightness      = int(self.config.get("display_brightness", 8))
         spi_port        = int(self.config.get("max7219_spi_port", 0))
         spi_device      = int(self.config.get("max7219_spi_device", 0))
-        block_orient    = int(self.config.get("max7219_block_orientation", 0))
+        block_orient    = int(self.config.get("max7219_block_orientation", -90))
 
         W = cascaded * 8  # 32 or 64
         H = 8
@@ -1735,9 +1735,9 @@ class Display:
                 ssid = subprocess.check_output(
                     ["iwgetid", "-r"], stderr=subprocess.DEVNULL
                 ).decode().strip()
-                return ssid or "NO WIFI"
+                return ("WIFI: " + ssid).upper() if ssid else "WIFI: NONE"
             except Exception:
-                return "NO WIFI"
+                return "WIFI: NONE"
 
         def _get_ip():
             try:
@@ -1746,24 +1746,64 @@ class Display:
                 s.connect(("8.8.8.8", 80))
                 ip = s.getsockname()[0]
                 s.close()
-                return ip
+                return f"IP: {ip}"
             except Exception:
-                return "NO IP"
+                return "IP: NONE"
 
-        def _get_counters():
+        def _get_db_stats():
             try:
-                targets = getattr(self.shared_data, 'nb_targets', 0) or 0
-                creds   = getattr(self.shared_data, 'nb_credentials', 0) or 0
-                return f"T:{targets} C:{creds}"
+                db = getattr(self.shared_data, 'db', None)
+                if db and callable(getattr(db, 'get_stats', None)):
+                    return db.get_stats()
             except Exception:
-                return "T:0 C:0"
+                pass
+            return {}
+
+        def _get_targets():
+            try:
+                stats = _get_db_stats()
+                count = stats.get('total_hosts', 0)
+                return f"TARGETS FOUND: {count}"
+            except Exception:
+                return "TARGETS FOUND: 0"
+
+        def _get_credentials():
+            try:
+                db = getattr(self.shared_data, 'db', None)
+                if db:
+                    with db.get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT COUNT(*) FROM hosts WHERE (
+                                (steal_files_ssh    IS NOT NULL AND steal_files_ssh    != '' AND steal_files_ssh    != '[]') OR
+                                (steal_files_rdp    IS NOT NULL AND steal_files_rdp    != '' AND steal_files_rdp    != '[]') OR
+                                (steal_files_ftp    IS NOT NULL AND steal_files_ftp    != '' AND steal_files_ftp    != '[]') OR
+                                (steal_files_smb    IS NOT NULL AND steal_files_smb    != '' AND steal_files_smb    != '[]') OR
+                                (steal_files_telnet IS NOT NULL AND steal_files_telnet != '' AND steal_files_telnet != '[]') OR
+                                (steal_data_sql     IS NOT NULL AND steal_data_sql     != '' AND steal_data_sql     != '[]')
+                            )
+                        """)
+                        count = cursor.fetchone()[0]
+                        return f"CREDENTIALS STOLEN: {count}"
+            except Exception:
+                pass
+            return "CREDENTIALS STOLEN: 0"
+
+        def _get_vulns():
+            try:
+                stats = _get_db_stats()
+                count = stats.get('hosts_with_vulns', 0)
+                return f"VULNERABILITIES: {count}"
+            except Exception:
+                return "VULNERABILITIES: 0"
 
         def _get_status():
             try:
-                status = getattr(self.shared_data, 'current_action', '') or ''
-                return status[:20] if status else "IDLE"
+                status = getattr(self.shared_data, 'ragnarstatustext', '') or \
+                         getattr(self.shared_data, 'current_action', '') or ''
+                return status.upper()[:30] if status else "STATUS: IDLE"
             except Exception:
-                return "IDLE"
+                return "STATUS: IDLE"
 
         # ── Scroll loop ───────────────────────────────────────────────────
         _tick       = 0
@@ -1775,9 +1815,11 @@ class Display:
         def _build_messages():
             return [
                 "* RAGNAR *",
+                _get_targets(),
+                _get_credentials(),
+                _get_vulns(),
                 _get_wifi(),
                 _get_ip(),
-                _get_counters(),
                 _get_status(),
             ]
 
