@@ -15,6 +15,7 @@ WARNING: Only run against networks you own or have explicit written permission t
 import os
 import json
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -272,8 +273,6 @@ class AirSnitchRunner:
 
     def preflight(self, iface_attacker: str) -> None:
         """Install missing runtime deps and release NM control of the attacker interface."""
-        import shutil
-
         # macchanger is required by the port-steal tests at runtime; install it
         # on-the-fly so tests don't crash even if it was missing at install time.
         if not shutil.which("macchanger"):
@@ -358,9 +357,8 @@ class AirSnitchRunner:
         inconclusive, reason = self._is_inconclusive(raw)
         # airsnitch prints both GTK values but never says "gtk is shared".
         # Detect a shared GTK by extracting both values and comparing them.
-        import re as _re
-        victim_m = _re.search(r"victim's gtk is \(([^)]+)\)", raw["stdout"], _re.IGNORECASE)
-        attacker_m = _re.search(r"attacker's gtk is \(([^)]+)\)", raw["stdout"], _re.IGNORECASE)
+        victim_m = re.search(r"victim's gtk is \(([^)]+)\)", raw["stdout"], re.IGNORECASE)
+        attacker_m = re.search(r"attacker's gtk is \(([^)]+)\)", raw["stdout"], re.IGNORECASE)
         if not inconclusive and victim_m and attacker_m:
             vulnerable = victim_m.group(1) == attacker_m.group(1)
         else:
@@ -645,14 +643,11 @@ class AirSnitch:
 
         finally:
             # Restore NetworkManager management of the attacker interface
-            import shutil as _shutil
-            if _shutil.which("nmcli"):
+            if shutil.which("nmcli"):
                 subprocess.run(
                     ["nmcli", "dev", "set", iface_attacker, "managed", "yes"],
                     timeout=10, capture_output=True,
                 )
-
-        finally:
             self._running = False
 
     def get_latest_results(self) -> Optional[dict]:
