@@ -302,6 +302,21 @@ class AirSnitchRunner:
         except Exception as exc:
             return {"returncode": -1, "stdout": "", "stderr": str(exc)}
 
+    @staticmethod
+    def _is_inconclusive(raw: dict) -> tuple[bool, str]:
+        """Return (True, reason) when a test did not produce a conclusive result."""
+        stdout_lower = raw.get("stdout", "").lower()
+        if "timeout while connecting" in stdout_lower:
+            return True, "connection timeout (NetworkManager may be interfering – run: nmcli radio wifi off)"
+        if "traceback (most recent call last)" in stdout_lower:
+            # Surface the last line of the traceback as the reason
+            lines = raw.get("stdout", "").splitlines()
+            last = next((l.strip() for l in reversed(lines) if l.strip()), "unknown error")
+            return True, f"crashed: {last}"
+        if raw.get("returncode", 0) == -1:
+            return True, raw.get("stderr") or "command timed out"
+        return False, ""
+
     def test_gtk_shared(
         self, iface_victim: str, iface_attacker: str, same_bss: bool = False
     ) -> dict:
@@ -311,18 +326,21 @@ class AirSnitchRunner:
             [iface_attacker, "--check-gtk-shared", iface_victim,
              "--no-ssid-check", bss_flag]
         )
+        inconclusive, reason = self._is_inconclusive(raw)
         # airsnitch prints both GTK values but never says "gtk is shared".
         # Detect a shared GTK by extracting both values and comparing them.
         import re as _re
         victim_m = _re.search(r"victim's gtk is \(([^)]+)\)", raw["stdout"], _re.IGNORECASE)
         attacker_m = _re.search(r"attacker's gtk is \(([^)]+)\)", raw["stdout"], _re.IGNORECASE)
-        if victim_m and attacker_m:
+        if not inconclusive and victim_m and attacker_m:
             vulnerable = victim_m.group(1) == attacker_m.group(1)
         else:
             vulnerable = False
         return {
             "test": "gtk_shared",
             "vulnerable": vulnerable,
+            "inconclusive": inconclusive,
+            "inconclusive_reason": reason,
             "same_bss": same_bss,
             **raw,
         }
@@ -336,10 +354,14 @@ class AirSnitchRunner:
             [iface_attacker, "--c2c-ip", iface_victim,
              "--no-ssid-check", bss_flag]
         )
-        vulnerable = "client to client traffic at ip layer is allowed" in raw["stdout"].lower()
+        inconclusive, reason = self._is_inconclusive(raw)
+        vulnerable = (not inconclusive and
+                      "client to client traffic at ip layer is allowed" in raw["stdout"].lower())
         return {
             "test": "gateway_bouncing",
             "vulnerable": vulnerable,
+            "inconclusive": inconclusive,
+            "inconclusive_reason": reason,
             "same_bss": same_bss,
             **raw,
         }
@@ -352,10 +374,14 @@ class AirSnitchRunner:
             [iface_attacker, "--c2c-port-steal", iface_victim,
              "--no-ssid-check", "--other-bss", "--server", server]
         )
-        vulnerable = "downlink port stealing is successful" in raw["stdout"].lower()
+        inconclusive, reason = self._is_inconclusive(raw)
+        vulnerable = (not inconclusive and
+                      "downlink port stealing is successful" in raw["stdout"].lower())
         return {
             "test": "port_steal_downlink",
             "vulnerable": vulnerable,
+            "inconclusive": inconclusive,
+            "inconclusive_reason": reason,
             "server": server,
             **raw,
         }
@@ -371,10 +397,14 @@ class AirSnitchRunner:
         if server:
             args += ["--server", server]
         raw = self._run(args)
-        vulnerable = "uplink port stealing is successful" in raw["stdout"].lower()
+        inconclusive, reason = self._is_inconclusive(raw)
+        vulnerable = (not inconclusive and
+                      "uplink port stealing is successful" in raw["stdout"].lower())
         return {
             "test": "port_steal_uplink",
             "vulnerable": vulnerable,
+            "inconclusive": inconclusive,
+            "inconclusive_reason": reason,
             "same_bss": same_bss,
             "server": server,
             **raw,
@@ -531,26 +561,19 @@ class AirSnitch:
                 name for name, data in results["tests"].items()
                 if isinstance(data, dict) and data.get("vulnerable")
             ]
+            inconclusive_tests = [
+                name for name, data in results["tests"].items()
+                if isinstance(data, dict) and data.get("inconclusive")
+            ]
+            conclusive_tests = len(results["tests"]) - len(inconclusive_tests)
             results["summary"] = {
                 "total_tests": len(results["tests"]),
                 "vulnerable_count": len(vulnerable_tests),
                 "vulnerable_tests": vulnerable_tests,
-                "network_isolated": len(vulnerable_tests) == 0,
+                "inconclusive_tests": inconclusive_tests,
+                # only declare network isolated when ALL tests ran AND none were vulnerable
+                "network_isolated": len(vulnerable_tests) == 0 and len(inconclusive_tests) == 0,
             }
-
-            # Warn if every test timed out – usually means NetworkManager is
-            # fighting over the interface. Surface a clear remediation hint.
-            timed_out_tests = [
-                name for name, data in results["tests"].items()
-                if isinstance(data, dict) and "timeout" in data.get("stderr", "").lower()
-                or isinstance(data, dict) and "timeout while connecting" in data.get("stdout", "").lower()
-            ]
-            if timed_out_tests and len(timed_out_tests) == len(results["tests"]):
-                self.logger.warning(
-                    "AirSnitch: ALL tests timed out while connecting. "
-                    "Disable Wi-Fi in your network manager (e.g. 'nmcli radio wifi off') "
-                    "so it does not compete for the wireless interface."
-                )
 
             self._save_results(results)
 
@@ -559,8 +582,26 @@ class AirSnitch:
                     f"AirSnitch: network FAILS client isolation – "
                     f"vulnerable to: {', '.join(vulnerable_tests)}"
                 )
-            else:
-                self.logger.info("AirSnitch: network passes client isolation tests")
+            if inconclusive_tests:
+                reasons = {
+                    name: results["tests"][name].get("inconclusive_reason", "unknown")
+                    for name in inconclusive_tests
+                }
+                reason_str = "; ".join(f"{n}: {r}" for n, r in reasons.items())
+                self.logger.warning(
+                    f"AirSnitch: {len(inconclusive_tests)} test(s) inconclusive – {reason_str}"
+                )
+                if all("timeout while connecting" in r for r in reasons.values()):
+                    self.logger.warning(
+                        "AirSnitch: all timeouts are likely caused by NetworkManager competing "
+                        "for the wireless interface. Run: nmcli radio wifi off"
+                    )
+            if not vulnerable_tests and not inconclusive_tests:
+                self.logger.info("AirSnitch: network passes all client isolation tests")
+            elif not vulnerable_tests and conclusive_tests == 0:
+                self.logger.warning(
+                    "AirSnitch: no conclusive results – all tests failed to complete"
+                )
 
             return "success"
 
