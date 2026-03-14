@@ -15027,6 +15027,21 @@ def airsnitch_install():
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
+@app.route('/api/airsnitch/run-log', methods=['GET'])
+def airsnitch_run_log():
+    """Return the live test run log and current running state."""
+    try:
+        airsnitch = _get_airsnitch_instance()
+        return jsonify({
+            'success': True,
+            'log': airsnitch.get_run_log(),
+            'running': airsnitch.is_running(),
+        })
+    except Exception as exc:
+        logger.error(f"airsnitch_run_log error: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
 @app.route('/api/airsnitch/install-log', methods=['GET'])
 def airsnitch_install_log():
     """Return the live install log and current install state."""

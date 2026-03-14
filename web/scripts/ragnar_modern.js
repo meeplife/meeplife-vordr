@@ -8020,9 +8020,38 @@ async function _pollAirSnitchInstallLog(btn, statusDiv, logDiv) {
     });
 }
 
+async function _pollAirSnitchRunLog(btn, statusDiv, logDiv, originalText) {
+    logDiv.classList.remove('hidden');
+    logDiv.textContent = '';
+    return new Promise((resolve) => {
+        const interval = setInterval(async () => {
+            try {
+                const data = await fetchAPI('/api/airsnitch/run-log');
+                if (data.log !== undefined) {
+                    logDiv.textContent = data.log;
+                    logDiv.scrollTop = logDiv.scrollHeight;
+                }
+                if (!data.running) {
+                    clearInterval(interval);
+                    if (statusDiv) statusDiv.textContent = 'Tests complete. Refreshing results…';
+                    if (btn) { btn.disabled = false; btn.textContent = originalText; }
+                    await refreshAirSnitchResults();
+                    if (statusDiv) statusDiv.textContent = 'Done.';
+                    resolve();
+                }
+            } catch (e) {
+                clearInterval(interval);
+                if (btn) { btn.disabled = false; btn.textContent = originalText; }
+                resolve();
+            }
+        }, 2000);
+    });
+}
+
 async function runAirSnitch() {
     const btn = document.getElementById('airsnitch-run-btn');
     const statusDiv = document.getElementById('airsnitch-status');
+    const logDiv = document.getElementById('airsnitch-run-log');
 
     const ifaceVictim   = document.getElementById('airsnitch-iface-victim')?.value.trim()   || 'wlan1';
     const ifaceAttacker = document.getElementById('airsnitch-iface-attacker')?.value.trim() || 'wlan2';
@@ -8059,12 +8088,12 @@ async function runAirSnitch() {
         if (statusDiv) statusDiv.textContent = data.message || 'Started.';
         addConsoleMessage('AirSnitch tests started', 'info');
 
-        // Poll for results after a short delay
-        setTimeout(refreshAirSnitchResults, 10000);
+        // Stream live output until the run completes
+        await _pollAirSnitchRunLog(btn, statusDiv, logDiv, originalText);
+        addConsoleMessage('AirSnitch tests complete', 'info');
     } catch (e) {
         if (statusDiv) statusDiv.textContent = `Error: ${e.message}`;
         addConsoleMessage(`AirSnitch failed: ${e.message}`, 'error');
-    } finally {
         if (btn) { btn.disabled = false; btn.textContent = originalText; }
     }
 }

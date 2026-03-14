@@ -45,6 +45,7 @@ class AirSnitchRunner:
         self.script = self.install_dir / "airsnitch" / "research" / "airsnitch.py"
         self.research_dir = self.script.parent
         self.install_log_file = log_file  # Path to write live install output
+        self.run_log_file: Optional[Path] = None  # Path to write live test output
 
     # ------------------------------------------------------------------
     # Installation helpers
@@ -62,6 +63,25 @@ class AirSnitchRunner:
                     fh.write(msg + "\n")
             except Exception:
                 pass
+
+    def _run_log(self, msg: str) -> None:
+        """Write a message to both the Python logger and the live run log file."""
+        self.logger.info(msg)
+        if self.run_log_file:
+            try:
+                with open(self.run_log_file, "a") as fh:
+                    fh.write(msg + "\n")
+            except Exception:
+                pass
+
+    def get_run_log(self) -> str:
+        """Return the current contents of the run log (empty string if none)."""
+        if not self.run_log_file:
+            return ""
+        try:
+            return Path(self.run_log_file).read_text()
+        except Exception:
+            return ""
 
     def _run_logged(self, cmd: list, cwd: Optional[str] = None, timeout: int = 300) -> subprocess.CompletedProcess:
         """Run a command and stream its output line-by-line to the install log."""
@@ -206,24 +226,34 @@ class AirSnitchRunner:
     # ------------------------------------------------------------------
 
     def _run(self, args: list, timeout: int = DEFAULT_TIMEOUT) -> dict:
-        """Execute airsnitch.py with the given arguments and return parsed output."""
+        """Execute airsnitch.py with the given arguments, streaming output to the run log."""
         cmd = ["python3", str(self.script)] + args
-        self.logger.info(f"Running: {' '.join(cmd)}")
+        self._run_log(f"$ {' '.join(cmd)}")
+        output_lines: list = []
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.research_dir),  # script references client.conf etc. relatively
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=timeout,
+                bufsize=1,
             )
+            try:
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    output_lines.append(line)
+                    self._run_log(line)
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                self._run_log("ERROR: command timed out")
+                return {"returncode": -1, "stdout": "\n".join(output_lines), "stderr": "Timed out"}
             return {
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "returncode": proc.returncode,
+                "stdout": "\n".join(output_lines),
+                "stderr": "",
             }
-        except subprocess.TimeoutExpired:
-            return {"returncode": -1, "stdout": "", "stderr": "Timed out"}
         except Exception as exc:
             return {"returncode": -1, "stdout": "", "stderr": str(exc)}
 
@@ -331,7 +361,9 @@ class AirSnitch:
         )
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.install_log_path = self.results_dir / "install.log"
+        self.run_log_path = self.results_dir / "run.log"
         self.runner = AirSnitchRunner(install_dir, self.logger, log_file=self.install_log_path)
+        self.runner.run_log_file = self.run_log_path
 
     # ------------------------------------------------------------------
     # Helpers
@@ -393,6 +425,12 @@ class AirSnitch:
             f"same_bss={same_bss} tests={tests}"
         )
 
+        # Clear the run log for this fresh run
+        try:
+            self.run_log_path.write_text("")
+        except Exception:
+            pass
+
         results = {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "iface_victim": iface_victim,
@@ -400,6 +438,7 @@ class AirSnitch:
             "tests": {},
         }
 
+        self._running = True
         try:
             if "gtk" in tests:
                 self.logger.info("AirSnitch: running GTK shared-key test …")
@@ -455,6 +494,9 @@ class AirSnitch:
             self._save_results(results)
             return "failed"
 
+        finally:
+            self._running = False
+
     def get_latest_results(self) -> Optional[dict]:
         """Return the most recent saved results, or None if none exist."""
         files = sorted(self.results_dir.glob("airsnitch_*.json"), reverse=True)
@@ -472,6 +514,14 @@ class AirSnitch:
         except Exception:
             return ""
 
+    def get_run_log(self) -> str:
+        """Return the current contents of the test run log (empty string if none)."""
+        return self.runner.get_run_log()
+
     def is_installing(self) -> bool:
         """True while an install thread is running."""
         return getattr(self, "_installing", False)
+
+    def is_running(self) -> bool:
+        """True while a test run thread is active."""
+        return getattr(self, "_running", False)
