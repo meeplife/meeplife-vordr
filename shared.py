@@ -843,6 +843,7 @@ class SharedData:
             self.epd_helper = None
             self.screen_reversed     = bool(self.config.get("screen_reversed", False))
             self.web_screen_reversed = self.screen_reversed
+            self.apply_display_profile(epd_type_cfg)   # keeps ref_width/ref_height in sync
             logger.info(
                 f"Character display '{epd_type_cfg}' configured: {self.width}x{self.height}"
                 " — skipping EPD buffer init"

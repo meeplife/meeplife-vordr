@@ -58,7 +58,8 @@ class Display:
 
         try:
             self.epd_helper = self.shared_data.epd_helper
-            self.epd_helper.init_partial_update()
+            if self.epd_helper is not None:
+                self.epd_helper.init_partial_update()
             logger.info("Display initialization complete.")
         except Exception as e:
             logger.error(f"Error during display initialization: {e}")
