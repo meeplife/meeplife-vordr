@@ -1522,6 +1522,82 @@ class Display:
             time.sleep(TICK_SLEEP)
 
     # ------------------------------------------------------------------
+    # LCD1602 16x2 character LCD display loop
+    # ------------------------------------------------------------------
+
+    def _run_lcd1602(self):
+        """Main display loop for LCD1602 16x2 character LCD (I2C via PCF8574).
+
+        Line 1 (cols 0-15): "RAGNAR|<STATUS>" — current orchestrator status.
+        Line 2 (cols 0-15): "H:<n> C:<n> V:<n>" — live hosts / creds / vulns.
+
+        Updates every 1 second; gracefully handles I2C errors and retries.
+        """
+        from resources.waveshare_epd import lcd1602 as _lcd1602_mod
+
+        TICK_SLEEP = 1.0   # seconds between display refreshes
+
+        # ── Initialise display ──────────────────────────────────────────
+        _i2c_raw = self.config.get("lcd1602_i2c_address", "0x27")
+        i2c_addr = int(_i2c_raw, 16) if isinstance(_i2c_raw, str) else int(_i2c_raw)
+        i2c_bus  = int(self.config.get("lcd1602_i2c_bus", 1))
+
+        epd = _lcd1602_mod.EPD(i2c_address=i2c_addr, i2c_bus=i2c_bus)
+        try:
+            epd.init()
+        except Exception as exc:
+            logger.error("LCD1602 init failed: %s", exc)
+            # Keep running — will retry each tick so the display works once wired
+        
+        _last_line1 = None
+        _last_line2 = None
+
+        # ── Main loop ───────────────────────────────────────────────────
+        while not self.shared_data.display_should_exit:
+            try:
+                sd = self.shared_data
+
+                # — collect live data from shared_data —
+                status  = (getattr(sd, "ragnarorch_status", "IDLE") or "IDLE").upper()
+                targets = getattr(sd, "total_targetnbr", 0) or 0
+                creds   = getattr(sd, "crednbr",         0) or 0
+                vulns   = getattr(sd, "vulnnbr",          0) or 0
+
+                # — build 16-char strings —
+                prefix  = "RAGNAR|"
+                avail   = 16 - len(prefix)
+                line1   = (prefix + status[:avail]).ljust(16)[:16]
+
+                stats   = "H:{} C:{} V:{}".format(targets, creds, vulns)
+                line2   = stats.ljust(16)[:16]
+
+                # — only push to hardware when content changes —
+                if not epd._initialized:
+                    epd.init()
+
+                if line1 != _last_line1:
+                    epd.write_line(0, line1)
+                    _last_line1 = line1
+
+                if line2 != _last_line2:
+                    epd.write_line(1, line2)
+                    _last_line2 = line2
+
+            except Exception as exc:
+                logger.error("LCD1602 render error: %s", exc)
+                _last_line1 = None   # force re-draw after error
+                _last_line2 = None
+
+            time.sleep(TICK_SLEEP)
+
+        # ── Cleanup on exit ─────────────────────────────────────────────
+        try:
+            epd.Clear()
+            epd.sleep()
+        except Exception as exc:
+            logger.error("LCD1602 shutdown error: %s", exc)
+
+    # ------------------------------------------------------------------
     # SSD1306 0.96" 128x64 monochrome OLED display loop
     # ------------------------------------------------------------------
 
@@ -1687,6 +1763,10 @@ class Display:
 
         if self.config.get("epd_type") == "ssd1306":
             self._run_ssd1306()
+            return
+
+        if self.config.get("epd_type") == "lcd1602":
+            self._run_lcd1602()
             return
 
         # Wait for deferred initialization (fonts, images) to finish

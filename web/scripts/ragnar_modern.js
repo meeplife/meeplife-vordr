@@ -313,6 +313,14 @@ const configMetadata = {
         label: "GC9A01 Mascot Tint Color",
         description: "Tint color applied to the animated mascot on the GC9A01 1.28\" round TFT display. Only visible when GC9A01 is selected."
     },
+    lcd1602_i2c_address: {
+        label: "LCD1602 I2C Address",
+        description: "I2C address of the PCF8574 backpack on the LCD1602 16×2 character display. Common values: 0x27 (most common) or 0x3F. Auto-detected if unreachable."
+    },
+    display_brightness: {
+        label: "Display Brightness",
+        description: "Brightness level for non-e-ink displays (SSD1306, GC9A01, MAX7219). Range 0–15. Default: 8."
+    },
     portlist: {
         label: "Additional Ports",
         description: "Comma separated list of extra ports to check on every host in addition to the sequential range."
@@ -475,6 +483,7 @@ function epdTypeToSizeKey(epd_type) {
     if (epd_type.startsWith('epd3in7')) return '3in7';
     if (epd_type === 'gc9a01') return '1in28_tft';
     if (epd_type === 'ssd1306') return '0in96_oled';
+    if (epd_type === 'lcd1602') return 'lcd1602';
     return epd_type; // fallback: return as-is
 }
 
@@ -486,7 +495,8 @@ const displaySelectOptions = {
         { value: '2in9', label: '2.9" e-Paper (128x296)' },
         { value: '3in7', label: '3.7" e-Paper (280x480)' },
         { value: '1in28_tft', label: '1.28" GC9A01 Round TFT (240x240)' },
-        { value: '0in96_oled', label: '0.96" SSD1306 OLED (128x64)' }
+        { value: '0in96_oled', label: '0.96" SSD1306 OLED (128x64)' },
+        { value: 'lcd1602', label: '16×2 LCD1602 Character LCD (I2C)' }
     ],
     screen_reversed: [
         { value: 'false', label: 'Normal orientation' },
@@ -9418,15 +9428,16 @@ function displayConfigForm(config) {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Network': ['network_max_failed_pings'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
-        'Display': ['epd_type', 'screen_reversed', 'gc9a01_mascot_color', 'ssd1306_i2c_address']
+        'Display': ['epd_type', 'screen_reversed', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address']
     };
     
     const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
-    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address']);
+    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address']);
     const fallbackValues = {
         network_max_failed_pings: 15,
         gc9a01_mascot_color: '#96C8FF',
-        ssd1306_i2c_address: '0x3C'
+        ssd1306_i2c_address: '0x3C',
+        lcd1602_i2c_address: '0x27'
     };
     const checkboxHandlers = {
         scan_vuln_running: 'handleVulnScanToggle(this)',
@@ -9523,6 +9534,20 @@ function displayConfigForm(config) {
                             <p class="text-xs text-gray-500">Most modules use 0x3C. Use 0x3D if display doesn't initialize.</p>
                         </div>
                     `;
+                } else if (key === 'lcd1602_i2c_address') {
+                    const currentVal = (value && typeof value === 'string') ? value : '0x27';
+                    html += `
+                        <div class="space-y-2" id="cfg-lcd1602-addr-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="text" name="${key}" id="cfg-lcd1602-addr-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${currentVal}" placeholder="0x27 or 0x3F">
+                            <p class="text-xs text-gray-500">Most PCF8574 backpacks use 0x27. Address is auto-detected if unreachable.</p>
+                        </div>
+                    `;
                 } else {
                     html += `
                         <div class="space-y-2">
@@ -9559,12 +9584,16 @@ function displayConfigForm(config) {
     const epdSelect = document.querySelector('select[name="epd_type"]');
     const colorRow = document.getElementById('cfg-gc9a01-color-row');
     const addrRow = document.getElementById('cfg-ssd1306-addr-row');
+    const lcdAddrRow = document.getElementById('cfg-lcd1602-addr-row');
     function syncDisplayRows() {
         if (colorRow && epdSelect) {
             colorRow.style.display = (epdSelect.value === '1in28_tft') ? '' : 'none';
         }
         if (addrRow && epdSelect) {
             addrRow.style.display = (epdSelect.value === '0in96_oled') ? '' : 'none';
+        }
+        if (lcdAddrRow && epdSelect) {
+            lcdAddrRow.style.display = (epdSelect.value === 'lcd1602') ? '' : 'none';
         }
     }
     if (epdSelect) {
