@@ -51,8 +51,14 @@ class AirSnitchRunner:
     # Installation helpers
     # ------------------------------------------------------------------
 
+    @property
+    def wpa_supplicant_bin(self) -> Path:
+        """Expected path of the custom-compiled wpa_supplicant binary."""
+        return self.install_dir / "wpa_supplicant" / "wpa_supplicant"
+
     def is_installed(self) -> bool:
-        return self.script.exists()
+        """True only when both the research script AND compiled wpa_supplicant exist."""
+        return self.script.exists() and self.wpa_supplicant_bin.exists()
 
     def _log(self, msg: str) -> None:
         """Write a message to both the Python logger and the live install log file."""
@@ -138,8 +144,9 @@ class AirSnitchRunner:
             # Install libnl / openssl / build-essential before attempting compilation
             self._install_system_deps()
 
-            # If dir exists but is incomplete (no airsnitch.py), wipe and re-clone
-            if self.install_dir.exists() and not self.script.exists():
+            # If dir exists but is incomplete (missing script or compiled binary), wipe and re-clone
+            incomplete = self.install_dir.exists() and not self.script.exists()
+            if incomplete:
                 self._log(f"Incomplete install detected at {self.install_dir} – removing and re-cloning …")
                 shutil.rmtree(str(self.install_dir), ignore_errors=True)
 
@@ -156,6 +163,7 @@ class AirSnitchRunner:
             else:
                 self._log("Repository already present – skipping clone.")
 
+            # Run setup.sh if present (sets up the repo structure)
             setup = self.install_dir / "setup.sh"
             if setup.exists():
                 self._log("Running setup.sh …")
@@ -175,6 +183,27 @@ class AirSnitchRunner:
                         cwd=str(self.install_dir),
                         timeout=300,
                     )
+
+            # Run build.sh to compile the custom wpa_supplicant (required at runtime)
+            build = self.install_dir / "build.sh"
+            if not self.wpa_supplicant_bin.exists():
+                if build.exists():
+                    self._log("Compiling wpa_supplicant via build.sh (this may take several minutes) …")
+                    result = self._run_logged(
+                        ["bash", str(build)],
+                        cwd=str(self.install_dir),
+                        timeout=1800,
+                    )
+                    if result.returncode != 0:
+                        self._log(f"ERROR: build.sh failed (exit {result.returncode})")
+                        return False
+                else:
+                    self._log("ERROR: build.sh not found – cannot compile wpa_supplicant")
+                    return False
+
+            if not self.wpa_supplicant_bin.exists():
+                self._log("ERROR: wpa_supplicant binary not found after build – compilation may have failed")
+                return False
 
             if not self.script.exists():
                 self._log("ERROR: airsnitch.py not found after install")
@@ -388,12 +417,21 @@ class AirSnitch:
         """Run the configured AirSnitch tests and persist results."""
         self.logger.info("AirSnitch: starting Wi-Fi client isolation test")
 
-        # Ensure AirSnitch is available
+        # Ensure AirSnitch is available (script + compiled wpa_supplicant)
         if not self.runner.is_installed():
             self.logger.info("AirSnitch not installed – attempting installation …")
             if not self.runner.install():
                 self.logger.error("AirSnitch installation failed – skipping")
                 return "failed"
+
+        # Extra sanity check: wpa_supplicant binary must exist
+        if not self.runner.wpa_supplicant_bin.exists():
+            self.logger.error(
+                f"AirSnitch requires a compiled wpa_supplicant at "
+                f"{self.runner.wpa_supplicant_bin}. "
+                f"Run 'bash build.sh' inside {self.runner.install_dir} to build it."
+            )
+            return "failed"
 
         iface_victim   = self._cfg("airsnitch_iface_victim",   "wlan1")
         iface_attacker = self._cfg("airsnitch_iface_attacker", "wlan2")

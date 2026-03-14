@@ -7952,8 +7952,16 @@ async function checkAirSnitchInstalled() {
     try {
         const data = await fetchAPI('/api/airsnitch/status');
         const notice = document.getElementById('airsnitch-install-notice');
+        const noticeText = document.getElementById('airsnitch-install-notice-text');
         if (notice) {
             notice.classList.toggle('hidden', data.installed !== false);
+            if (!data.installed && noticeText) {
+                if (data.script_present && !data.wpa_supplicant_compiled) {
+                    noticeText.textContent = 'AirSnitch is cloned but wpa_supplicant is not compiled. Click Install to build it.';
+                } else {
+                    noticeText.textContent = 'AirSnitch is not installed.';
+                }
+            }
         }
         return data.installed;
     } catch (e) {

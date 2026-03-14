@@ -14919,11 +14919,15 @@ def airsnitch_status():
     """Return AirSnitch installation status and latest results."""
     try:
         airsnitch = _get_airsnitch_instance()
-        installed = airsnitch.runner.is_installed()
+        script_ok = airsnitch.runner.script.exists()
+        wpa_ok = airsnitch.runner.wpa_supplicant_bin.exists()
+        installed = script_ok and wpa_ok
         latest = airsnitch.get_latest_results()
         return jsonify({
             'success': True,
             'installed': installed,
+            'script_present': script_ok,
+            'wpa_supplicant_compiled': wpa_ok,
             'latest_results': latest,
         })
     except Exception as exc:
