@@ -53,8 +53,11 @@ class AirSnitchRunner:
 
     @property
     def wpa_supplicant_bin(self) -> Path:
-        """Expected path of the custom-compiled wpa_supplicant binary."""
-        return self.install_dir / "wpa_supplicant" / "wpa_supplicant"
+        """Expected path of the custom-compiled wpa_supplicant binary.
+        build.sh is run inside airsnitch/research/ so the binary ends up at
+        install_dir/airsnitch/wpa_supplicant/wpa_supplicant (one level up from research/).
+        """
+        return self.research_dir.parent / "wpa_supplicant" / "wpa_supplicant"
 
     def is_installed(self) -> bool:
         """True only when both the research script AND compiled wpa_supplicant exist."""
@@ -150,6 +153,13 @@ class AirSnitchRunner:
                 self._log(f"Incomplete install detected at {self.install_dir} – removing and re-cloning …")
                 shutil.rmtree(str(self.install_dir), ignore_errors=True)
 
+            # Fix git "dubious ownership" error when running as a different user
+            self._run_logged(
+                ["git", "config", "--global", "--add",
+                 "safe.directory", str(self.install_dir)],
+                timeout=10,
+            )
+
             if not self.install_dir.exists():
                 self._log(f"Cloning AirSnitch into {self.install_dir} …")
                 result = self._run_logged(
@@ -163,7 +173,7 @@ class AirSnitchRunner:
             else:
                 self._log("Repository already present – skipping clone.")
 
-            # Run setup.sh if present (sets up the repo structure)
+            # Run setup.sh if present (initialises git submodules etc.)
             setup = self.install_dir / "setup.sh"
             if setup.exists():
                 self._log("Running setup.sh …")
@@ -175,35 +185,40 @@ class AirSnitchRunner:
                 if result.returncode != 0:
                     self._log(f"WARNING: setup.sh exited {result.returncode} – continuing anyway")
             else:
-                self._log("No setup.sh found – installing Python dependencies directly …")
-                req = self.install_dir / "requirements.txt"
-                if req.exists():
-                    self._run_logged(
-                        ["pip3", "install", "-r", str(req)],
-                        cwd=str(self.install_dir),
-                        timeout=300,
-                    )
+                self._log("No setup.sh found – skipping.")
 
-            # Run build.sh to compile the custom wpa_supplicant (required at runtime)
-            build = self.install_dir / "build.sh"
+            # build.sh lives in airsnitch/research/ – compile wpa_supplicant there
+            build = self.research_dir / "build.sh"
             if not self.wpa_supplicant_bin.exists():
                 if build.exists():
                     self._log("Compiling wpa_supplicant via build.sh (this may take several minutes) …")
                     result = self._run_logged(
                         ["bash", str(build)],
-                        cwd=str(self.install_dir),
+                        cwd=str(self.research_dir),
                         timeout=1800,
                     )
                     if result.returncode != 0:
                         self._log(f"ERROR: build.sh failed (exit {result.returncode})")
                         return False
                 else:
-                    self._log("ERROR: build.sh not found – cannot compile wpa_supplicant")
+                    self._log(f"ERROR: build.sh not found at {build} – cannot compile wpa_supplicant")
                     return False
 
             if not self.wpa_supplicant_bin.exists():
                 self._log("ERROR: wpa_supplicant binary not found after build – compilation may have failed")
                 return False
+
+            # pysetup.sh creates the Python venv used by the research scripts
+            pysetup = self.research_dir / "pysetup.sh"
+            if pysetup.exists():
+                self._log("Running pysetup.sh …")
+                result = self._run_logged(
+                    ["bash", str(pysetup)],
+                    cwd=str(self.research_dir),
+                    timeout=300,
+                )
+                if result.returncode != 0:
+                    self._log(f"WARNING: pysetup.sh exited {result.returncode} – continuing anyway")
 
             if not self.script.exists():
                 self._log("ERROR: airsnitch.py not found after install")
