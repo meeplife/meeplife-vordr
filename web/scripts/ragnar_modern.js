@@ -8023,6 +8023,8 @@ async function _pollAirSnitchInstallLog(btn, statusDiv, logDiv) {
 async function _pollAirSnitchRunLog(btn, statusDiv, logDiv, originalText) {
     logDiv.classList.remove('hidden');
     logDiv.textContent = '';
+    // Brief pause so the background thread has started and set _running=True
+    await new Promise(r => setTimeout(r, 800));
     return new Promise((resolve) => {
         const interval = setInterval(async () => {
             try {

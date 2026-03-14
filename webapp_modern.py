@@ -14966,6 +14966,8 @@ def airsnitch_run():
             cfg[k] = v
 
         airsnitch = _get_airsnitch_instance()
+        # Set flag before spawning so the first poll sees running=True immediately
+        airsnitch._running = True
 
         def run_in_background():
             try:
