@@ -806,6 +806,17 @@ print('SUCCESS: Set shared_config.json epd_type to $EPD_VERSION')
         # Enable I2C interface
         raspi-config nonint do_i2c 0 2>/dev/null || true
         log "INFO" "I2C interface enabled for SSD1306"
+    elif [ "$EPD_VERSION" = "lcd1602" ]; then
+        if [ -f "$ragnar_PATH/resources/waveshare_epd/lcd1602.py" ]; then
+            log "SUCCESS" "LCD1602 driver verified (resources/waveshare_epd/lcd1602.py)"
+        else
+            log "ERROR" "LCD1602 driver not found at $ragnar_PATH/resources/waveshare_epd/lcd1602.py"
+        fi
+        # Install smbus2 for I2C communication
+        pip3 install smbus2 --break-system-packages >/dev/null 2>&1
+        # Enable I2C interface
+        raspi-config nonint do_i2c 0 2>/dev/null || true
+        log "INFO" "I2C interface enabled for LCD1602"
     else
         log "INFO" "Verifying Waveshare e-Paper library installation for $EPD_VERSION..."
         cd /home/$ragnar_USER/e-Paper/RaspberryPi_JetsonNano/python
@@ -1526,19 +1537,21 @@ main() {
             echo -e "\n${BLUE}Select your TFT/OLED display:${NC}"
             echo "1. GC9A01      (1.28\" Round 240x240)"
             echo "2. SSD1306     (0.96\" OLED 128x64)"
-            echo "3. No display  (headless install)"
+            echo "3. LCD1602     (16x2 I2C Character LCD)"
+            echo "4. No display  (headless install)"
 
             while true; do
-                read -p "Enter your choice (1-3): " tft_choice
+                read -p "Enter your choice (1-4): " tft_choice
                 case $tft_choice in
                     1) EPD_VERSION="gc9a01"; break;;
                     2) EPD_VERSION="ssd1306"; break;;
-                    3)
+                    3) EPD_VERSION="lcd1602"; break;;
+                    4)
                         select_headless_variant
                         EPD_VERSION=""
                         break
                         ;;
-                    *) echo -e "${RED}Invalid choice. Please select 1-3.${NC}";;
+                    *) echo -e "${RED}Invalid choice. Please select 1-4.${NC}";;
                 esac
             done
 
@@ -1662,10 +1675,13 @@ except:
             echo -e "${CYAN}  OLED displays:${NC}"
             echo "10. SSD1306      (0.96\" OLED 128x64)"
             echo ""
-            echo "11. No display (headless install)"
+            echo -e "${CYAN}  Character LCD:${NC}"
+            echo "11. LCD1602      (16x2 I2C Character LCD)"
+            echo ""
+            echo "12. No display (headless install)"
 
             while true; do
-                read -p "Enter your choice (1-11): " epd_choice
+                read -p "Enter your choice (1-12): " epd_choice
                 case $epd_choice in
                     1) EPD_VERSION="epd2in13"; break;;
                     2) EPD_VERSION="epd2in13_V2"; break;;
@@ -1677,12 +1693,13 @@ except:
                     8) EPD_VERSION="epd3in7"; break;;
                     9) EPD_VERSION="gc9a01"; break;;
                     10) EPD_VERSION="ssd1306"; break;;
-                    11)
+                    11) EPD_VERSION="lcd1602"; break;;
+                    12)
                         select_headless_variant
                         EPD_VERSION=""
                         break
                         ;;
-                    *) echo -e "${RED}Invalid choice. Please select 1-11.${NC}";;
+                    *) echo -e "${RED}Invalid choice. Please select 1-12.${NC}";;
                 esac
             done
 
