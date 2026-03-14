@@ -844,8 +844,8 @@ class SharedData:
             self.screen_reversed     = bool(self.config.get("screen_reversed", False))
             self.web_screen_reversed = self.screen_reversed
             logger.info(
-                "Character display '%s' configured: %dx%d — skipping EPD buffer init",
-                epd_type_cfg, self.width, self.height,
+                f"Character display '{epd_type_cfg}' configured: {self.width}x{self.height}"
+                " — skipping EPD buffer init"
             )
             return
 
