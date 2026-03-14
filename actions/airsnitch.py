@@ -114,7 +114,7 @@ class AirSnitchRunner:
 
     def _install_system_deps(self) -> bool:
         """Ensure build dependencies for hostapd/wpa_supplicant are present."""
-        # Packages required to build hostapd (used by AirSnitch's setup.sh)
+        # Packages required to build wpa_supplicant and run AirSnitch
         pkgs = [
             "libnl-3-dev",
             "libnl-genl-3-dev",
@@ -123,6 +123,7 @@ class AirSnitchRunner:
             "libdbus-1-dev",
             "build-essential",
             "git",
+            "macchanger",       # required by port-steal tests (MAC address spoofing)
         ]
         self._log("Installing system build dependencies …")
         result = self._run_logged(
@@ -536,6 +537,20 @@ class AirSnitch:
                 "vulnerable_tests": vulnerable_tests,
                 "network_isolated": len(vulnerable_tests) == 0,
             }
+
+            # Warn if every test timed out – usually means NetworkManager is
+            # fighting over the interface. Surface a clear remediation hint.
+            timed_out_tests = [
+                name for name, data in results["tests"].items()
+                if isinstance(data, dict) and "timeout" in data.get("stderr", "").lower()
+                or isinstance(data, dict) and "timeout while connecting" in data.get("stdout", "").lower()
+            ]
+            if timed_out_tests and len(timed_out_tests) == len(results["tests"]):
+                self.logger.warning(
+                    "AirSnitch: ALL tests timed out while connecting. "
+                    "Disable Wi-Fi in your network manager (e.g. 'nmcli radio wifi off') "
+                    "so it does not compete for the wireless interface."
+                )
 
             self._save_results(results)
 
