@@ -1526,16 +1526,40 @@ class Display:
     # ------------------------------------------------------------------
 
     def _run_lcd1602(self):
-        """Main display loop for LCD1602 16x2 character LCD (I2C via PCF8574).
+        """LCD1602 16×2 display loop — rotates between two info pages.
 
-        Line 1 (cols 0-15): "RAGNAR|<STATUS>" — current orchestrator status.
-        Line 2 (cols 0-15): "H:<n> C:<n> V:<n>" — live hosts / creds / vulns.
+        Page 0 — Status + Network (PAGE_INTERVAL seconds):
+          Line 0: orchestrator status        e.g. "SCANNING        "
+          Line 1: WiFi SSID (iwgetid)        e.g. ">Tango Down     "
 
-        Updates every 1 second; gracefully handles I2C errors and retries.
+        Page 1 — Counts + IP (PAGE_INTERVAL seconds):
+          Line 0: targets / vulns / creds    e.g. "T:42 V:5 C:3    "
+          Line 1: IP address                 e.g. "192.168.1.100   "
+
+        Pages switch every PAGE_INTERVAL seconds; display polls every TICK_SLEEP.
+        Handles I2C errors gracefully — forces full re-init on next tick.
         """
+        import subprocess
         from resources.waveshare_epd import lcd1602 as _lcd1602_mod
 
-        TICK_SLEEP = 1.0   # seconds between display refreshes
+        PAGE_INTERVAL = 4.0   # seconds per page
+        TICK_SLEEP    = 0.5   # polling interval (seconds)
+
+        def _get_wifi():
+            """Return (ssid, ip) using iwgetid for the live WiFi SSID."""
+            try:
+                res = subprocess.run(
+                    ["iwgetid", "-r"], capture_output=True, text=True, timeout=2
+                )
+                ssid = res.stdout.strip()
+                if ssid:
+                    ip = getattr(self.shared_data, "ipaddress", "") or ""
+                    return ssid, ip
+            except Exception:
+                pass
+            if getattr(self.shared_data, "ap_enabled", False):
+                return "AP MODE", getattr(self.shared_data, "ipaddress", "") or ""
+            return "", getattr(self.shared_data, "ipaddress", "") or ""
 
         # ── Initialise display ──────────────────────────────────────────
         _i2c_raw = self.config.get("lcd1602_i2c_address", "0x27")
@@ -1547,46 +1571,62 @@ class Display:
             epd.init()
         except Exception as exc:
             logger.error("LCD1602 init failed: %s", exc)
-            # Keep running — will retry each tick so the display works once wired
-        
-        _last_line1 = None
-        _last_line2 = None
+            # Loop will retry on each tick once hardware is available
+
+        _last_line0  = None
+        _last_line1  = None
+        _last_page   = -1          # force write on first tick
+        _page_start  = time.monotonic()
+        _current_page = 0
 
         # ── Main loop ───────────────────────────────────────────────────
         while not self.shared_data.display_should_exit:
             try:
-                sd = self.shared_data
+                sd  = self.shared_data
+                now = time.monotonic()
 
-                # — collect live data from shared_data —
+                # — page timing —
+                if now - _page_start >= PAGE_INTERVAL:
+                    _current_page = 1 - _current_page
+                    _page_start   = now
+
+                # — gather data —
                 status  = (getattr(sd, "ragnarorch_status", "IDLE") or "IDLE").upper()
                 targets = getattr(sd, "total_targetnbr", 0) or 0
-                creds   = getattr(sd, "crednbr",         0) or 0
                 vulns   = getattr(sd, "vulnnbr",          0) or 0
+                creds   = getattr(sd, "crednbr",          0) or 0
+                ssid, ip = _get_wifi()
 
-                # — build 16-char strings —
-                prefix  = "RAGNAR|"
-                avail   = 16 - len(prefix)
-                line1   = (prefix + status[:avail]).ljust(16)[:16]
+                # — build 16-char lines for the current page —
+                if _current_page == 0:
+                    line0 = status.ljust(16)[:16]
+                    net   = (">" + ssid) if ssid else "No Network"
+                    line1 = net.ljust(16)[:16]
+                else:
+                    counts = "T:{} V:{} C:{}".format(targets, vulns, creds)
+                    line0  = counts.ljust(16)[:16]
+                    line1  = (ip or "No IP").ljust(16)[:16]
 
-                stats   = "H:{} C:{} V:{}".format(targets, creds, vulns)
-                line2   = stats.ljust(16)[:16]
-
-                # — only push to hardware when content changes —
+                # — reinit hardware if previously failed or errored —
                 if not epd._initialized:
                     epd.init()
 
-                if line1 != _last_line1:
-                    epd.write_line(0, line1)
+                # — write only changed lines; on page switch always refresh both —
+                page_switched = (_current_page != _last_page)
+                if page_switched or line0 != _last_line0:
+                    epd.write_line(0, line0)
+                    _last_line0 = line0
+                if page_switched or line1 != _last_line1:
+                    epd.write_line(1, line1)
                     _last_line1 = line1
-
-                if line2 != _last_line2:
-                    epd.write_line(1, line2)
-                    _last_line2 = line2
+                if page_switched:
+                    _last_page = _current_page
 
             except Exception as exc:
                 logger.error("LCD1602 render error: %s", exc)
-                _last_line1 = None   # force re-draw after error
-                _last_line2 = None
+                epd._initialized = False   # force full re-init on next tick
+                _last_line0 = None
+                _last_line1 = None
 
             time.sleep(TICK_SLEEP)
 

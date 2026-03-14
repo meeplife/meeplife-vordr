@@ -111,11 +111,14 @@ class EPD:
     def write_line(self, row: int, text: str):
         """Write *text* to the given *row* (0 or 1), padded/truncated to 16 chars.
 
-        This is the primary method used by the display loop.
+        Non-ASCII characters are replaced with '?' since the HD44780 ROM only
+        covers ASCII + Japanese kana glyphs.  This is the primary method used
+        by the display loop.
         """
         if not self._initialized:
             self.init()
-        row = max(0, min(row, LCD_HEIGHT - 1))
+        row  = max(0, min(row, LCD_HEIGHT - 1))
+        text = text.encode("ascii", errors="replace").decode("ascii")
         text = text.ljust(LCD_WIDTH)[:LCD_WIDTH]
         self._set_cursor(row, 0)
         for ch in text:
@@ -131,11 +134,16 @@ class EPD:
             logger.warning("LCD1602 backlight control failed: %s", exc)
 
     def sleep(self):
-        """Turn off the display and backlight to save power."""
+        """Turn off the display and backlight to save power.
+
+        Resets *_initialized* so a subsequent call to ``init()`` will re-run
+        the full HD44780 startup sequence.
+        """
         try:
             if self._initialized:
                 self._send_cmd(_CMD_DISPLAYCONTROL)   # display OFF (all flags cleared)
             self.backlight(False)
+            self._initialized = False
             logger.info("LCD1602 sleeping")
         except Exception as exc:
             logger.error("LCD1602 sleep error: %s", exc)
