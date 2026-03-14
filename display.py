@@ -1663,7 +1663,10 @@ class Display:
         _bottom_start  = time.monotonic() - BOTTOM_INTERVAL  # trigger write on first tick
 
         # ── Main loop ───────────────────────────────────────────────────
+        _hw_line0 = None   # tracks what is currently written to hardware
+        _hw_line1 = None
         while not self.shared_data.display_should_exit:
+            # — compute current content (slot timers + data) —
             try:
                 sd  = self.shared_data
                 now = time.monotonic()
@@ -1701,28 +1704,32 @@ class Display:
                     line1 = f"Credentials: {creds}"
                 line1 = line1.ljust(16)[:16]
 
-                # — reinit hardware if previously failed or errored —
-                if not epd._initialized:
-                    epd.init()
-
-                # — write only changed lines —
-                _changed = False
-                if line0 != _last_line0:
-                    epd.write_line(0, line0)
+                # — update web preview whenever content changes —
+                if line0 != _last_line0 or line1 != _last_line1:
+                    _render_lcd_preview(line0, line1)
                     _last_line0 = line0
-                    _changed = True
-                if line1 != _last_line1:
-                    epd.write_line(1, line1)
                     _last_line1 = line1
-                    _changed = True
-                if _changed:
-                    _render_lcd_preview(_last_line0, _last_line1)
 
             except Exception as exc:
-                logger.error(f"LCD1602 render error: {exc}")
+                logger.error(f"LCD1602 data error: {exc}")
+
+            # — write to hardware (isolated so I2C errors don't block preview) —
+            try:
+                if not epd._initialized:
+                    epd.init()
+                    _hw_line0 = None   # force full rewrite after reinit
+                    _hw_line1 = None
+                if _last_line0 is not None and _last_line0 != _hw_line0:
+                    epd.write_line(0, _last_line0)
+                    _hw_line0 = _last_line0
+                if _last_line1 is not None and _last_line1 != _hw_line1:
+                    epd.write_line(1, _last_line1)
+                    _hw_line1 = _last_line1
+            except Exception as exc:
+                logger.error(f"LCD1602 hardware write error: {exc}")
                 epd._initialized = False
-                _last_line0 = None
-                _last_line1 = None
+                _hw_line0 = None
+                _hw_line1 = None
 
             time.sleep(TICK_SLEEP)
 
