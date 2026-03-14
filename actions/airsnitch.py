@@ -267,6 +267,35 @@ class AirSnitchRunner:
         conf_path.write_text(conf)
 
     # ------------------------------------------------------------------
+    # Pre-flight checks
+    # ------------------------------------------------------------------
+
+    def preflight(self, iface_attacker: str) -> None:
+        """Install missing runtime deps and release NM control of the attacker interface."""
+        import shutil
+
+        # macchanger is required by the port-steal tests at runtime; install it
+        # on-the-fly so tests don't crash even if it was missing at install time.
+        if not shutil.which("macchanger"):
+            self._log("macchanger not found – installing …")
+            self._run_logged(
+                ["apt-get", "install", "-y", "--no-install-recommends", "macchanger"],
+                timeout=60,
+            )
+
+        # Ask NetworkManager to stop managing the attacker interface so it
+        # doesn't compete with airsnitch's own wpa_supplicant.
+        if shutil.which("nmcli"):
+            self._run_logged(
+                ["nmcli", "dev", "set", iface_attacker, "managed", "no"],
+                timeout=10,
+            )
+            self._log(
+                f"NetworkManager: set {iface_attacker} unmanaged "
+                "(will be restored after the scan)"
+            )
+
+    # ------------------------------------------------------------------
     # Test runners
     # ------------------------------------------------------------------
 
@@ -498,6 +527,9 @@ class AirSnitch:
         attacker_ssid  = self._cfg("airsnitch_attacker_ssid")
         attacker_psk   = self._cfg("airsnitch_attacker_psk")
 
+        # Pre-flight: install missing runtime tools and release NM's grip
+        self.runner.preflight(iface_attacker)
+
         # Write client.conf if credentials are provided
         if victim_ssid and victim_psk and attacker_ssid and attacker_psk:
             conf_path = self.runner.research_dir / "client.conf"
@@ -610,6 +642,15 @@ class AirSnitch:
             results["error"] = str(exc)
             self._save_results(results)
             return "failed"
+
+        finally:
+            # Restore NetworkManager management of the attacker interface
+            import shutil as _shutil
+            if _shutil.which("nmcli"):
+                subprocess.run(
+                    ["nmcli", "dev", "set", iface_attacker, "managed", "yes"],
+                    timeout=10, capture_output=True,
+                )
 
         finally:
             self._running = False
