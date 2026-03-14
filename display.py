@@ -21,7 +21,7 @@ import logging
 import random
 import sys
 import csv
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from init_shared import shared_data  
 from comment import Commentaireia
 from logger import Logger
@@ -1580,6 +1580,70 @@ class Display:
             status = getattr(self.shared_data, "ragnarstatustext", None) or "IDLE"
             return str(status)
 
+        def _render_lcd_preview(row0: str, row1: str):
+            """Write a simulated LCD1602 image to screen.png for the web preview tab."""
+            try:
+                # Colours — classic green-on-dark LCD backlit look
+                BEZEL_COLOR  = (20, 28, 20)
+                BG_COLOR     = (10, 22, 10)
+                CHAR_COLOR   = (80, 255, 100)
+                CURSOR_COLOR = (40, 120, 50)   # darker fill for empty char cells
+
+                BEZEL       = 14   # px border around the LCD panel
+                PAD_X       = 18   # horizontal padding inside the panel
+                PAD_Y       = 12   # vertical padding inside the panel
+                ROW_GAP     = 10   # gap between the two character rows
+                FONT_SIZE   = 28
+
+                # Try common monospace fonts available on the Pi and Windows
+                font = None
+                for fp in (
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+                    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+                    "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
+                    "C:/Windows/Fonts/cour.ttf",
+                ):
+                    try:
+                        font = ImageFont.truetype(fp, size=FONT_SIZE)
+                        break
+                    except Exception:
+                        pass
+                if font is None:
+                    font = ImageFont.load_default()
+
+                # Measure a single character to size the canvas
+                probe = Image.new("RGB", (1, 1))
+                bb = ImageDraw.Draw(probe).textbbox((0, 0), "W", font=font)
+                char_w = bb[2] - bb[0]
+                char_h = bb[3] - bb[1]
+
+                panel_w = PAD_X * 2 + char_w * 16
+                panel_h = PAD_Y * 2 + char_h * 2 + ROW_GAP
+                img_w   = panel_w + BEZEL * 2
+                img_h   = panel_h + BEZEL * 2
+
+                img  = Image.new("RGB", (img_w, img_h), BEZEL_COLOR)
+                draw = ImageDraw.Draw(img)
+
+                # LCD panel background
+                draw.rectangle(
+                    [BEZEL, BEZEL, BEZEL + panel_w - 1, BEZEL + panel_h - 1],
+                    fill=BG_COLOR,
+                )
+
+                # Draw each row of 16 characters
+                for row_idx, text in enumerate((row0, row1)):
+                    text = (text or "").ljust(16)[:16]
+                    x = BEZEL + PAD_X
+                    y = BEZEL + PAD_Y + row_idx * (char_h + ROW_GAP)
+                    draw.text((x, y), text, font=font, fill=CHAR_COLOR)
+
+                webdir = getattr(self.shared_data, "webdir", None)
+                if webdir:
+                    img.save(os.path.join(webdir, "screen.png"))
+            except Exception as exc:
+                logger.error(f"LCD1602 preview render error: {exc}")
+
         # ── Initialise display ──────────────────────────────────────────
         _i2c_raw = self.config.get("lcd1602_i2c_address", "0x27")
         i2c_addr = int(_i2c_raw, 16) if isinstance(_i2c_raw, str) else int(_i2c_raw)
@@ -1642,12 +1706,17 @@ class Display:
                     epd.init()
 
                 # — write only changed lines —
+                _changed = False
                 if line0 != _last_line0:
                     epd.write_line(0, line0)
                     _last_line0 = line0
+                    _changed = True
                 if line1 != _last_line1:
                     epd.write_line(1, line1)
                     _last_line1 = line1
+                    _changed = True
+                if _changed:
+                    _render_lcd_preview(_last_line0, _last_line1)
 
             except Exception as exc:
                 logger.error(f"LCD1602 render error: {exc}")
