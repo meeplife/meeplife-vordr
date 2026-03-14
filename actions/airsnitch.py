@@ -310,7 +310,15 @@ class AirSnitchRunner:
             [iface_attacker, "--check-gtk-shared", iface_victim,
              "--no-ssid-check", bss_flag]
         )
-        vulnerable = "gtk is shared" in raw["stdout"].lower()
+        # airsnitch prints both GTK values but never says "gtk is shared".
+        # Detect a shared GTK by extracting both values and comparing them.
+        import re as _re
+        victim_m = _re.search(r"victim's gtk is \(([^)]+)\)", raw["stdout"], _re.IGNORECASE)
+        attacker_m = _re.search(r"attacker's gtk is \(([^)]+)\)", raw["stdout"], _re.IGNORECASE)
+        if victim_m and attacker_m:
+            vulnerable = victim_m.group(1) == attacker_m.group(1)
+        else:
+            vulnerable = False
         return {
             "test": "gtk_shared",
             "vulnerable": vulnerable,
@@ -343,7 +351,7 @@ class AirSnitchRunner:
             [iface_attacker, "--c2c-port-steal", iface_victim,
              "--no-ssid-check", "--other-bss", "--server", server]
         )
-        vulnerable = "success" in raw["stdout"].lower() or "intercepted" in raw["stdout"].lower()
+        vulnerable = "downlink port stealing is successful" in raw["stdout"].lower()
         return {
             "test": "port_steal_downlink",
             "vulnerable": vulnerable,
@@ -362,7 +370,7 @@ class AirSnitchRunner:
         if server:
             args += ["--server", server]
         raw = self._run(args)
-        vulnerable = "success" in raw["stdout"].lower() or "intercepted" in raw["stdout"].lower()
+        vulnerable = "uplink port stealing is successful" in raw["stdout"].lower()
         return {
             "test": "port_steal_uplink",
             "vulnerable": vulnerable,
