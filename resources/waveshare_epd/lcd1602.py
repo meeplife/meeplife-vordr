@@ -212,9 +212,9 @@ class EPD:
     def _pulse_enable(self, data: int):
         """Pulse the EN pin high then low to latch a nibble."""
         self._write_byte(data | _EN)    # EN high
-        time.sleep(0.0001)
+        time.sleep(0.0005)
         self._write_byte(data & ~_EN)   # EN low
-        time.sleep(0.00005)
+        time.sleep(0.0001)
 
     def _send_nibble(self, nibble: int, mode: int):
         """Send a 4-bit nibble.  *mode* is _RS for data or 0 for command."""

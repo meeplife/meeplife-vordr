@@ -1571,7 +1571,7 @@ class Display:
         try:
             epd.init()
         except Exception as exc:
-            logger.error("LCD1602 init failed: %s", exc)
+            logger.error(f"LCD1602 init failed: {exc}")
             # Loop will retry on each tick once hardware is available
 
         _last_line0  = None
@@ -1624,7 +1624,7 @@ class Display:
                     _last_page = _current_page
 
             except Exception as exc:
-                logger.error("LCD1602 render error: %s", exc)
+                logger.error(f"LCD1602 render error: {exc}")
                 epd._initialized = False   # force full re-init on next tick
                 _last_line0 = None
                 _last_line1 = None
@@ -1636,7 +1636,7 @@ class Display:
             epd.Clear()
             epd.sleep()
         except Exception as exc:
-            logger.error("LCD1602 shutdown error: %s", exc)
+            logger.error(f"LCD1602 shutdown error: {exc}")
 
     # ------------------------------------------------------------------
     # SSD1306 0.96" 128x64 monochrome OLED display loop
