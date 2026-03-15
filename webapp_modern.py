@@ -4413,23 +4413,33 @@ def export_report():
 
 @app.route('/api/vulnerability-report/<path:filename>')
 def download_vulnerability_report(filename):
-    """Stream a vulnerability report file while preventing directory traversal."""
-    try:
-        vuln_dir = os.path.abspath(os.path.join('data', 'output', 'vulnerabilities'))
-        requested_path = os.path.normpath(os.path.join(vuln_dir, filename))
+    """Stream a vulnerability report file while preventing directory traversal.
 
-        if not requested_path.startswith(vuln_dir):
-            logger.warning(f"Blocked traversal attempt for report: {filename}")
-            return jsonify({'error': 'File not found'}), 404
+    Supports per-network directories via ?network= query param so that download
+    URLs returned by /api/vulnerability-intel can be followed directly when a
+    network context is active. Falls back to the global vulnerabilities directory
+    when no network context is provided.
+    """
+    with _network_context_from_request():
+        try:
+            vuln_dir = os.path.abspath(
+                getattr(shared_data, 'vulnerabilities_dir',
+                        os.path.join('data', 'output', 'vulnerabilities'))
+            )
+            requested_path = os.path.normpath(os.path.join(vuln_dir, filename))
 
-        if not os.path.isfile(requested_path):
-            return jsonify({'error': 'File not found'}), 404
+            if not requested_path.startswith(vuln_dir + os.sep) and requested_path != vuln_dir:
+                logger.warning(f"Blocked traversal attempt for report: {filename}")
+                return jsonify({'error': 'File not found'}), 404
 
-        rel_path = os.path.relpath(requested_path, vuln_dir)
-        return send_from_directory(vuln_dir, rel_path, as_attachment=True)
-    except Exception as exc:
-        logger.error(f"Error serving vulnerability report {filename}: {exc}")
-        return jsonify({'error': 'Unable to download report'}), 500
+            if not os.path.isfile(requested_path):
+                return jsonify({'error': 'File not found'}), 404
+
+            rel_path = os.path.relpath(requested_path, vuln_dir)
+            return send_from_directory(vuln_dir, rel_path, as_attachment=True)
+        except Exception as exc:
+            logger.error(f"Error serving vulnerability report {filename}: {exc}")
+            return jsonify({'error': 'Unable to download report'}), 500
 
 
 @app.route('/api/vulnerability-intel')
@@ -4437,7 +4447,12 @@ def get_vulnerability_intel():
     """Get interesting intelligence from scan files (not vulnerabilities - those are in threat intel)"""
     with _network_context_from_request():
         try:
-            vuln_dir = os.path.join('data', 'output', 'vulnerabilities')
+            vuln_dir = getattr(shared_data, 'vulnerabilities_dir',
+                               os.path.join('data', 'output', 'vulnerabilities'))
+            # Embed network context into download links so clicking "View Full Report"
+            # resolves the correct per-network directory.
+            _net_slug = request.args.get('network') or request.args.get('ssid') or request.args.get('slug')
+            _net_qs = f"?network={_net_slug}" if _net_slug else ""
 
             if not os.path.exists(vuln_dir):
                 return jsonify({
@@ -4626,8 +4641,8 @@ def get_vulnerability_intel():
                                 'hostname': hostname,
                                 'scan_date': scan_date,
                                 'filename': filename,
-                                'download_url': f"/api/vulnerability-report/{filename}",
-                                'log_url': f"/api/vulnerability-report/{filename}",
+                                'download_url': f"/api/vulnerability-report/{filename}{_net_qs}",
+                                'log_url': f"/api/vulnerability-report/{filename}{_net_qs}",
                                 'services': services,
                                 'total_services': len(services)
                             })
@@ -4726,8 +4741,8 @@ def get_vulnerability_intel():
                         'hostname': hostname,
                         'scan_date': scan_date,
                         'filename': filename,
-                        'download_url': f"/api/vulnerability-report/{download_target}",
-                        'log_url': f"/api/vulnerability-report/{filename}",
+                        'download_url': f"/api/vulnerability-report/{download_target}{_net_qs}",
+                        'log_url': f"/api/vulnerability-report/{filename}{_net_qs}",
                         'services': [service_entry],
                         'total_services': 1,
                         'scan_type': 'lynis'
