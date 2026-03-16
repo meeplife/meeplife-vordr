@@ -1027,6 +1027,9 @@ async function loadTabData(tabName) {
             if (!alreadyPreloaded) {
                 await loadConnectData();
             } else {
+                // Always re-query the interface list so newly plugged-in
+                // adapters (USB dongles, etc.) appear without a page reload.
+                await loadWifiInterfaces().catch(err => console.warn('WiFi interface refresh failed:', err));
                 await refreshWifiStatus().catch(err => console.warn('WiFi refresh failed:', err));
                 await refreshEthernetStatus().catch(err => console.warn('LAN refresh failed:', err));
                 await refreshBluetoothStatus().catch(err => console.warn('Bluetooth refresh failed:', err));
