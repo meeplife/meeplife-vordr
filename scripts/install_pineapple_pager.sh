@@ -26,14 +26,14 @@ NC='\033[0m'
 
 # Configuration
 if [ -z "$1" ]; then
-    read -p "Enter Pager IP address [172.16.42.1]: " _pager_ip
+    read -p "Enter Pager IP address [172.16.*.1]: " _pager_ip
     PAGER_IP="${_pager_ip:-172.16.42.1}"
 else
     PAGER_IP="$1"
 fi
 PAGER_USER="root"
 PAGER_PAYLOAD_DIR="/root/payloads/user/reconnaissance/pager_ragnar"
-RAGNAR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+RAGNAR_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 log() {
     local level=$1; shift
@@ -133,7 +133,7 @@ fi
 
 log "INFO" "Checking for libpagerctl.so..."
 
-# First check if we have it bundled in Ragnar itself
+# Check if we have it bundled in Ragnar itself
 RAGNAR_PAGERCTL="${RAGNAR_DIR}/libpagerctl.so"
 BJORN_PAGERCTL_CHECK="${RAGNAR_DIR}/../pineapple_pager_bjorn/payloads/user/reconnaissance/pager_bjorn/libpagerctl.so"
 
@@ -189,59 +189,68 @@ STAGING_DIR=$(mktemp -d)
 PAYLOAD_STAGE="${STAGING_DIR}/pager_ragnar"
 mkdir -p "${PAYLOAD_STAGE}"
 
-# Core Ragnar files - ALL Python modules needed
-CORE_FILES=(
-    # Pager-specific entry points
+# Pager-specific files (live in pager/ subdirectory of the repo, deployed flat)
+PAGER_FILES=(
     "PagerRagnar.py"
     "pager_display.py"
     "pager_menu.py"
     "pager_payload.sh"
     "pagerctl.py"
     "pagerctl_mock.py"
-    
-    # Core shared modules
+)
+
+for f in "${PAGER_FILES[@]}"; do
+    src="${RAGNAR_DIR}/pager/${f}"
+    # Fallback: root of repo (in case someone hasn't reorganised yet)
+    [ -f "$src" ] || src="${RAGNAR_DIR}/${f}"
+    if [ -f "$src" ]; then
+        cp "$src" "${PAYLOAD_STAGE}/"
+    else
+        log "WARNING" "Pager file not found: ${f} (skipping)"
+    fi
+done
+
+# Core shared modules (live at repo root)
+CORE_FILES=(
+    # Shared modules
     "init_shared.py"
     "shared.py"
     "orchestrator.py"
     "comment.py"
     "logger.py"
     "__init__.py"
-    
+
     # Database and storage
     "db_manager.py"
     "network_storage.py"
-    
+
     # Network handling
     "multi_interface.py"
     "wifi_manager.py"
     "wifi_interfaces.py"
-    
-    # Display helpers
-    "epd_helper.py"
-    "display.py"
-    
+
     # Loggers
     "nmap_logger.py"
     "attack_logger.py"
-    
+
     # Intelligence and scanning
     "network_intelligence.py"
     "threat_intelligence.py"
     "traffic_analyzer.py"
     "advanced_vuln_scanner.py"
     "lynis_parser.py"
-    
+
     # Utilities
     "utils.py"
     "env_manager.py"
-    
+
     # AI service (optional but good to have)
     "ai_service.py"
-    
+
     # Web interface
     "webapp_modern.py"
     "server_capabilities.py"
-    
+
     # Resource monitor
     "resource_monitor.py"
 )
@@ -255,7 +264,7 @@ for f in "${CORE_FILES[@]}"; do
 done
 
 # Rename payload.sh for Pager launcher
-# Bjorn uses payload.sh; official Hak5 docs say just "payload" — create both
+# Hak5 firmware expects payload.sh — create both for compatibility
 if [ -f "${PAYLOAD_STAGE}/pager_payload.sh" ]; then
     mv "${PAYLOAD_STAGE}/pager_payload.sh" "${PAYLOAD_STAGE}/payload.sh"
     cp "${PAYLOAD_STAGE}/payload.sh" "${PAYLOAD_STAGE}/payload"
@@ -274,11 +283,17 @@ if [ -d "${RAGNAR_DIR}/config" ]; then
     log "SUCCESS" "Copied config directory"
 fi
 
-# Copy resources directory (fonts, images, comments, dictionaries)
-if [ -d "${RAGNAR_DIR}/resources" ]; then
-    cp -r "${RAGNAR_DIR}/resources" "${PAYLOAD_STAGE}/resources"
-    log "SUCCESS" "Copied resources directory"
+# Copy only required resources (skip e-paper driver and large PSD source files)
+mkdir -p "${PAYLOAD_STAGE}/resources"
+[ -d "${RAGNAR_DIR}/resources/fonts" ]   && cp -r "${RAGNAR_DIR}/resources/fonts"   "${PAYLOAD_STAGE}/resources/"
+[ -d "${RAGNAR_DIR}/resources/comments" ] && cp -r "${RAGNAR_DIR}/resources/comments" "${PAYLOAD_STAGE}/resources/"
+if [ -d "${RAGNAR_DIR}/resources/images" ]; then
+    mkdir -p "${PAYLOAD_STAGE}/resources/images"
+    [ -d "${RAGNAR_DIR}/resources/images/static" ] && cp -r "${RAGNAR_DIR}/resources/images/static" "${PAYLOAD_STAGE}/resources/images/"
+    [ -d "${RAGNAR_DIR}/resources/images/status" ] && cp -r "${RAGNAR_DIR}/resources/images/status" "${PAYLOAD_STAGE}/resources/images/"
+    # Skip *.psd source files (~21MB) and waveshare_epd (e-paper driver not used on pager)
 fi
+log "SUCCESS" "Copied pager resources (fonts, icons, status images)"
 
 # Copy web directory (for web UI)
 if [ -d "${RAGNAR_DIR}/web" ]; then
@@ -675,10 +690,6 @@ if [ "$NMAP_PY_OK" != "OK" ]; then
 else
     log "SUCCESS" "python-nmap already installed on Pager"
 fi
-
-# ============================================================
-# Step 9: Verify installation
-# ============================================================
 
 log "INFO" "Verifying installation..."
 
