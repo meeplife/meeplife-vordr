@@ -68,6 +68,7 @@ The portal supports network scanning with signal strength, manual entry for hidd
 - **LAN-First Connectivity** — Prefers Ethernet when present, manages WiFi as fallback
 - **Smart WiFi Management** — Auto-connects to known networks, falls back to AP mode, captive portal for configuration
 - **E-Paper Display** — Real-time status showing targets, vulnerabilities, credentials, and network info
+- **MAX7219 LED Matrix Display** — Cascaded 8×8 LED panel arrays (4-panel 32×8 or 8-panel 64×8). Scrolls SSID, IP, targets, and status. SPI-connected: DIN→GPIO10, CS→GPIO8, CLK→GPIO11.
 - **WiFi Pineapple Pager** — Full-color LCD display with button controls, LED indicators, and auto-dim. See [Pager section](#-wifi-pineapple-pager)
 - **Hardware-Bound Authentication** — Optional login with full database encryption at rest. See [Security & Authentication](docs/SECURITY.md)
 - **PiSugar 3 Button** — Physical button to swap between Ragnar and Pwnagotchi modes
@@ -269,3 +270,4 @@ See [Contributing Docs](docs/CONTRIBUTING.md) and [Code of Conduct](docs/CODE_OF
 ## 📜 License
 
 2025 - Ragnar is distributed under the MIT License. See the [LICENSE](LICENSE) file for details.
+

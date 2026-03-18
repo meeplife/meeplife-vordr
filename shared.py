@@ -99,6 +99,8 @@ DISPLAY_PROFILES = {
     "gc9a01":      {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_WIDTH, "default_flip": False},
     # SSD1306 0.96" 128x64 monochrome OLED
     "ssd1306":     {"ref_width": 128, "ref_height": 64, "default_flip": False},
+    "max7219_4panel": {"ref_width": 32,  "ref_height": 8, "default_flip": False},
+    "max7219_8panel": {"ref_width": 64,  "ref_height": 8, "default_flip": False},
 }
 
 
@@ -550,6 +552,10 @@ class SharedData:
             "screen_reversed": default_profile.get("default_flip", False),
             "gc9a01_mascot_color": "#96C8FF",
             "ssd1306_i2c_address": "0x3C",
+            "display_brightness": 8,
+            "max7219_spi_port":         0,
+            "max7219_spi_device":        0,
+            "max7219_block_orientation": -90,
             
             
             "__title_lists__": "List Settings",
@@ -824,6 +830,19 @@ class SharedData:
             self.screen_reversed = bool(self.config.get('screen_reversed', False))
             self.web_screen_reversed = self.screen_reversed
             return
+
+        # MAX7219 LED matrix is managed entirely by display.py — skip EPD init
+        _epd_type_check = self.config.get('epd_type', '')
+        if _epd_type_check in ("max7219_4panel", "max7219_8panel"):
+            logger.info(f"MAX7219 display configured ({_epd_type_check}) — skipping EPD init")
+            self.epd_helper = None
+            profile = DISPLAY_PROFILES.get(_epd_type_check, {"ref_width": 64, "ref_height": 8, "default_flip": False})
+            self.width = profile['ref_width']
+            self.height = profile['ref_height']
+            self.screen_reversed = bool(self.config.get('screen_reversed', False))
+            self.web_screen_reversed = self.screen_reversed
+            return
+
         try:
             logger.info("Initializing EPD display...")
             epd_type = self.config.get("epd_type", DEFAULT_EPD_TYPE)

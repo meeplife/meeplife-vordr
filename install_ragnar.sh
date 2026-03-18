@@ -816,6 +816,10 @@ print('SUCCESS: Set shared_config.json epd_type to $EPD_VERSION')
             || log "ERROR" "EPD driver $EPD_VERSION failed to import"
     fi
 
+    if [[ "$EPD_VERSION" == max7219* ]]; then
+        sudo pip3 install --break-system-packages luma.led_matrix luma.core 2>/dev/null || pip3 install --break-system-packages luma.led_matrix luma.core 2>/dev/null || true
+    fi
+
     check_success "Installed Python requirements"
 
     # Configure Ragnar entrypoint according to the selected mode
@@ -1662,10 +1666,14 @@ except:
             echo -e "${CYAN}  OLED displays:${NC}"
             echo "10. SSD1306      (0.96\" OLED 128x64)"
             echo ""
-            echo "11. No display (headless install)"
+            echo -e "${CYAN}  LED Matrix displays:${NC}"
+            echo "11. MAX7219  (8 panels 64×8 LED matrix)"
+            echo "12. MAX7219  (4 panels 32×8 LED matrix)"
+            echo ""
+            echo "13. No display (headless install)"
 
             while true; do
-                read -p "Enter your choice (1-11): " epd_choice
+                read -p "Enter your choice (1-13): " epd_choice
                 case $epd_choice in
                     1) EPD_VERSION="epd2in13"; break;;
                     2) EPD_VERSION="epd2in13_V2"; break;;
@@ -1677,12 +1685,14 @@ except:
                     8) EPD_VERSION="epd3in7"; break;;
                     9) EPD_VERSION="gc9a01"; break;;
                     10) EPD_VERSION="ssd1306"; break;;
-                    11)
+                    11) EPD_VERSION="max7219_8panel"; break;;
+                    12) EPD_VERSION="max7219_4panel"; break;;
+                    13)
                         select_headless_variant
                         EPD_VERSION=""
                         break
                         ;;
-                    *) echo -e "${RED}Invalid choice. Please select 1-11.${NC}";;
+                    *) echo -e "${RED}Invalid choice. Please select 1-13.${NC}";;
                 esac
             done
 

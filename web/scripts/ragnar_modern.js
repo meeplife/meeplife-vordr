@@ -313,6 +313,22 @@ const configMetadata = {
         label: "GC9A01 Mascot Tint Color",
         description: "Tint color applied to the animated mascot on the GC9A01 1.28\" round TFT display. Only visible when GC9A01 is selected."
     },
+    display_brightness: {
+        label: "Display Brightness",
+        description: "Brightness level for non-e-ink displays (SSD1306, GC9A01, MAX7219). Range 0–15. Default: 8."
+    },
+    max7219_spi_port: {
+        label: "MAX7219 SPI Port",
+        description: "SPI bus port for MAX7219 LED matrix (default: 0)"
+    },
+    max7219_spi_device: {
+        label: "MAX7219 SPI Device",
+        description: "SPI chip-enable pin for MAX7219 (0 = CE0, 1 = CE1, default: 0)"
+    },
+    max7219_block_orientation: {
+        label: "MAX7219 Block Orientation",
+        description: "Rotation of each 8×8 block (degrees). Try 0, 90, -90, or 180 if display looks wrong. Default: 0"
+    },
     portlist: {
         label: "Additional Ports",
         description: "Comma separated list of extra ports to check on every host in addition to the sequential range."
@@ -486,7 +502,9 @@ const displaySelectOptions = {
         { value: '2in9', label: '2.9" e-Paper (128x296)' },
         { value: '3in7', label: '3.7" e-Paper (280x480)' },
         { value: '1in28_tft', label: '1.28" GC9A01 Round TFT (240x240)' },
-        { value: '0in96_oled', label: '0.96" SSD1306 OLED (128x64)' }
+        { value: '0in96_oled', label: '0.96" SSD1306 OLED (128x64)' },
+        { value: 'max7219_8panel', label: 'MAX7219 8-panel LED Matrix (64×8)' },
+        { value: 'max7219_4panel', label: 'MAX7219 4-panel LED Matrix (32×8)' }
     ],
     screen_reversed: [
         { value: 'false', label: 'Normal orientation' },
@@ -9893,15 +9911,19 @@ function displayConfigForm(config) {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Network': ['network_max_failed_pings'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
-        'Display': ['epd_type', 'screen_reversed', 'gc9a01_mascot_color', 'ssd1306_i2c_address']
+        'Display': ['epd_type', 'screen_reversed', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']
     };
     
     const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
-    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address']);
+    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']);
     const fallbackValues = {
         network_max_failed_pings: 15,
         gc9a01_mascot_color: '#96C8FF',
-        ssd1306_i2c_address: '0x3C'
+        ssd1306_i2c_address: '0x3C',
+        max7219_spi_port: 0,
+        max7219_spi_device: 0,
+        max7219_block_orientation: -90,
+        display_brightness: 8
     };
     const checkboxHandlers = {
         scan_vuln_running: 'handleVulnScanToggle(this)',
@@ -9998,6 +10020,62 @@ function displayConfigForm(config) {
                             <p class="text-xs text-gray-500">Most modules use 0x3C. Use 0x3D if display doesn't initialize.</p>
                         </div>
                     `;
+                } else if (key === 'max7219_spi_port') {
+                    const spiPort = (value !== undefined && value !== null) ? value : 0;
+                    html += `
+                        <div class="space-y-2" id="cfg-max7219-spi-port-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-max7219-spi-port-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${spiPort}" min="0" max="1">
+                            <p class="text-xs text-gray-500">SPI bus (0 = SPI0, 1 = SPI1). Default: 0.</p>
+                        </div>
+                    `;
+                } else if (key === 'max7219_spi_device') {
+                    const spiDev = (value !== undefined && value !== null) ? value : 0;
+                    html += `
+                        <div class="space-y-2" id="cfg-max7219-spi-device-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-max7219-spi-device-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${spiDev}" min="0" max="1">
+                            <p class="text-xs text-gray-500">CE pin (0 = CE0/Pin24, 1 = CE1/Pin26). Default: 0.</p>
+                        </div>
+                    `;
+                } else if (key === 'max7219_block_orientation') {
+                    const orient = (value !== undefined && value !== null) ? value : -90;
+                    html += `
+                        <div class="space-y-2" id="cfg-max7219-block-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-max7219-block-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${orient}" step="90">
+                            <p class="text-xs text-gray-500">Rotation of each 8×8 block in degrees (0, 90, -90, 180). Try -90 if display looks sideways.</p>
+                        </div>
+                    `;
+                } else if (key === 'display_brightness') {
+                    const brightness = (value !== undefined && value !== null) ? value : 8;
+                    html += `
+                        <div class="space-y-2" id="cfg-display-brightness-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-display-brightness-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${brightness}" min="0" max="15">
+                            <p class="text-xs text-gray-500">Brightness 0–15. Applies to MAX7219, SSD1306, GC9A01. Default: 8.</p>
+                        </div>
+                    `;
                 } else {
                     html += `
                         <div class="space-y-2">
@@ -10030,17 +10108,25 @@ function displayConfigForm(config) {
         await saveConfig(e.target);
     });
 
-    // Show/hide GC9A01 colour row based on selected display type
+    // Show/hide display-type-specific rows based on selected display type
     const epdSelect = document.querySelector('select[name="epd_type"]');
     const colorRow = document.getElementById('cfg-gc9a01-color-row');
     const addrRow = document.getElementById('cfg-ssd1306-addr-row');
+    const max7219SpiPortRow = document.getElementById('cfg-max7219-spi-port-row');
+    const max7219SpiDevRow = document.getElementById('cfg-max7219-spi-device-row');
+    const max7219BlockRow = document.getElementById('cfg-max7219-block-row');
+    const brightnessRow = document.getElementById('cfg-display-brightness-row');
     function syncDisplayRows() {
-        if (colorRow && epdSelect) {
-            colorRow.style.display = (epdSelect.value === '1in28_tft') ? '' : 'none';
-        }
-        if (addrRow && epdSelect) {
-            addrRow.style.display = (epdSelect.value === '0in96_oled') ? '' : 'none';
-        }
+        const val = epdSelect ? epdSelect.value : '';
+        const isMax7219 = val === 'max7219_8panel' || val === 'max7219_4panel';
+        const isSsd1306 = val === '0in96_oled';
+        const isGc9a01 = val === '1in28_tft';
+        if (colorRow) colorRow.style.display = isGc9a01 ? '' : 'none';
+        if (addrRow) addrRow.style.display = isSsd1306 ? '' : 'none';
+        if (max7219SpiPortRow) max7219SpiPortRow.style.display = isMax7219 ? '' : 'none';
+        if (max7219SpiDevRow) max7219SpiDevRow.style.display = isMax7219 ? '' : 'none';
+        if (max7219BlockRow) max7219BlockRow.style.display = isMax7219 ? '' : 'none';
+        if (brightnessRow) brightnessRow.style.display = (isMax7219 || isSsd1306 || isGc9a01) ? '' : 'none';
     }
     if (epdSelect) {
         epdSelect.addEventListener('change', syncDisplayRows);

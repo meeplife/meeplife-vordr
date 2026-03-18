@@ -58,7 +58,10 @@ class Display:
 
         try:
             self.epd_helper = self.shared_data.epd_helper
-            self.epd_helper.init_partial_update()
+            # MAX7219 and other non-EPD displays set epd_helper to None;
+            # skip EPD-specific init — their _run_* method handles setup.
+            if self.epd_helper is not None:
+                self.epd_helper.init_partial_update()
             logger.info("Display initialization complete.")
         except Exception as e:
             logger.error(f"Error during display initialization: {e}")
@@ -1545,6 +1548,8 @@ class Display:
         i2c_addr = int(_i2c_raw, 16) if isinstance(_i2c_raw, str) else int(_i2c_raw)
         epd = _ssd1306_mod.EPD(i2c_address=i2c_addr)
         epd.init()
+        brightness = int(self.config.get("display_brightness", 8))
+        epd.contrast(min(255, brightness * 17))  # map 0-15 → 0-255
 
         # ── Load fonts once ─────────────────────────────────────────────
         _font_path = os.path.join(
@@ -1679,6 +1684,187 @@ class Display:
         except Exception as exc:
             logger.error("SSD1306 shutdown error: %s", exc)
 
+    def _run_max7219(self):
+        """Scrolling status display for MAX7219 cascaded LED matrix panels."""
+        from PIL import Image as _Image, ImageDraw as _ImageDraw, ImageFont as _ImageFont
+        from resources.waveshare_epd import max7219 as _max7219_mod
+        import os
+
+        epd_type        = self.config.get("epd_type", "max7219_8panel")
+        cascaded        = 4 if epd_type == "max7219_4panel" else 8
+        brightness      = int(self.config.get("display_brightness", 8))
+        spi_port        = int(self.config.get("max7219_spi_port", 0))
+        spi_device      = int(self.config.get("max7219_spi_device", 0))
+        block_orient    = int(self.config.get("max7219_block_orientation", -90))
+
+        W = cascaded * 8  # 32 or 64
+        H = 8
+        TICK_SLEEP = 0.1   # seconds per scroll tick
+        PNG_EVERY  = 50    # save screen.png every N ticks (~5s)
+
+        epd = _max7219_mod.EPD(
+            cascaded=cascaded,
+            spi_port=spi_port,
+            spi_device=spi_device,
+            brightness=brightness,
+            block_orientation=block_orient,
+        )
+        epd.init()
+
+        # ── Font ──────────────────────────────────────────────────────────
+        _font_path = os.path.join(os.path.dirname(__file__), "resources", "fonts", "DejaVuSansMono.ttf")
+
+        def _load_font(size):
+            try:
+                return _ImageFont.truetype(_font_path, size)
+            except Exception:
+                return _ImageFont.load_default()
+
+        font  = _load_font(9)
+        _y_off = -font.getbbox("A")[1]  # shift glyphs up so row 0 is used
+
+        # ── Helpers ───────────────────────────────────────────────────────
+        def _text_width(text):
+            try:
+                return font.getbbox(text)[2]
+            except Exception:
+                return len(text) * 6
+
+        def _get_wifi():
+            try:
+                import subprocess
+                ssid = subprocess.check_output(
+                    ["iwgetid", "-r"], stderr=subprocess.DEVNULL
+                ).decode().strip()
+                return ("WIFI: " + ssid).upper() if ssid else "WIFI: NONE"
+            except Exception:
+                return "WIFI: NONE"
+
+        def _get_ip():
+            try:
+                import socket
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+                s.close()
+                return f"IP: {ip}"
+            except Exception:
+                return "IP: NONE"
+
+        def _get_db_stats():
+            try:
+                db = getattr(self.shared_data, 'db', None)
+                if db and callable(getattr(db, 'get_stats', None)):
+                    return db.get_stats()
+            except Exception:
+                pass
+            return {}
+
+        def _get_targets():
+            try:
+                stats = _get_db_stats()
+                count = stats.get('total_hosts', 0)
+                return f"TARGETS FOUND: {count}"
+            except Exception:
+                return "TARGETS FOUND: 0"
+
+        def _get_credentials():
+            try:
+                db = getattr(self.shared_data, 'db', None)
+                if db:
+                    with db.get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT COUNT(*) FROM hosts WHERE (
+                                (steal_files_ssh    IS NOT NULL AND steal_files_ssh    != '' AND steal_files_ssh    != '[]') OR
+                                (steal_files_rdp    IS NOT NULL AND steal_files_rdp    != '' AND steal_files_rdp    != '[]') OR
+                                (steal_files_ftp    IS NOT NULL AND steal_files_ftp    != '' AND steal_files_ftp    != '[]') OR
+                                (steal_files_smb    IS NOT NULL AND steal_files_smb    != '' AND steal_files_smb    != '[]') OR
+                                (steal_files_telnet IS NOT NULL AND steal_files_telnet != '' AND steal_files_telnet != '[]') OR
+                                (steal_data_sql     IS NOT NULL AND steal_data_sql     != '' AND steal_data_sql     != '[]')
+                            )
+                        """)
+                        count = cursor.fetchone()[0]
+                        return f"CREDENTIALS STOLEN: {count}"
+            except Exception:
+                pass
+            return "CREDENTIALS STOLEN: 0"
+
+        def _get_vulns():
+            try:
+                stats = _get_db_stats()
+                count = stats.get('hosts_with_vulns', 0)
+                return f"VULNERABILITIES: {count}"
+            except Exception:
+                return "VULNERABILITIES: 0"
+
+        def _get_status():
+            try:
+                status = getattr(self.shared_data, 'ragnarstatustext', '') or \
+                         getattr(self.shared_data, 'current_action', '') or ''
+                return status.upper()[:30] if status else "STATUS: IDLE"
+            except Exception:
+                return "STATUS: IDLE"
+
+        # ── Scroll loop ───────────────────────────────────────────────────
+        _tick       = 0
+        _scroll_x   = W          # start off-screen right
+        _msg_idx    = 0
+        _messages   = []
+        _msg_refresh_every = 200  # refresh message list every 200 ticks (~20s)
+
+        def _build_messages():
+            return [
+                "* RAGNAR *",
+                _get_targets(),
+                _get_credentials(),
+                _get_vulns(),
+                _get_wifi(),
+                _get_ip(),
+                _get_status(),
+            ]
+
+        _messages = _build_messages()
+        _current_msg = _messages[0]
+        _msg_w = _text_width(_current_msg)
+
+        while not self.shared_data.display_should_exit:
+            # Refresh messages periodically
+            if _tick % _msg_refresh_every == 0:
+                _messages = _build_messages()
+
+            # Build frame
+            img  = _Image.new("1", (W, H), 0)
+            draw = _ImageDraw.Draw(img)
+            draw.text((_scroll_x, _y_off), _current_msg, font=font, fill=1)
+
+            epd.display(epd.getbuffer(img))
+
+            # Save web thumbnail
+            if _tick % PNG_EVERY == 0:
+                try:
+                    png_path = os.path.join(os.path.dirname(__file__), "web", "screen.png")
+                    # Scale up 4× so it's visible in browser
+                    img.resize((W * 4, H * 4), _Image.NEAREST).convert("RGB").save(png_path)
+                except Exception:
+                    pass
+
+            # Advance scroll
+            _scroll_x -= 1
+            if _scroll_x < -_msg_w:
+                # Message fully scrolled off — advance to next
+                _msg_idx = (_msg_idx + 1) % len(_messages)
+                _current_msg = _messages[_msg_idx]
+                _msg_w = _text_width(_current_msg)
+                _scroll_x = W  # reset to right edge
+
+            _tick += 1
+            import time as _time
+            _time.sleep(TICK_SLEEP)
+
+        epd.Clear()
+        epd.sleep()
+
     def run(self):
         """Main loop for updating the EPD display with shared data."""
         if self.config.get("epd_type") == "gc9a01":
@@ -1687,6 +1873,10 @@ class Display:
 
         if self.config.get("epd_type") == "ssd1306":
             self._run_ssd1306()
+            return
+
+        if self.config.get("epd_type") in ("max7219_4panel", "max7219_8panel"):
+            self._run_max7219()
             return
 
         # Wait for deferred initialization (fonts, images) to finish
