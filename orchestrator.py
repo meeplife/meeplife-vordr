@@ -45,6 +45,7 @@ class Orchestrator:
         self.standalone_actions = []  # List of standalone actions to be executed
         self.failed_scans_count = 0  # Count the number of failed scans
         self.network_scanner = None
+        self.nmap_vuln_scanner = None
         self.last_vuln_scan_time = datetime.min  # Set the last vulnerability scan time to the minimum datetime value
         
         # Verify critical configuration attributes exist

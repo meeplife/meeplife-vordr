@@ -26,10 +26,10 @@ FONT_DEJAVU = os.path.join(FONTS_DIR, 'DejaVuSansMono.ttf')
 if not os.path.exists(FONT_DEJAVU):
     FONT_DEJAVU = os.path.join(FONTS_DIR, 'Arial.ttf')
 
-# TTF font sizes
-TTF_SMALL = 14.0
-TTF_MEDIUM = 18.0
-TTF_LARGE = 24.0
+# TTF font sizes (tuned for 480x222 Pager LCD)
+TTF_SMALL = 13.0
+TTF_MEDIUM = 16.0
+TTF_LARGE = 20.0
 
 # Loot directory paths (use Ragnar data dir structure)
 DATA_DIR = os.path.join(PAYLOAD_DIR, "data")
@@ -142,23 +142,45 @@ class RagnarMenu:
 
     def cleanup(self):
         if hasattr(self, 'gfx'):
-            self.gfx.cleanup()
+            try:
+                # Clear screen to black before releasing hardware so the
+                # display doesn't freeze on the last drawn frame while
+                # pineapplepager is restarting.
+                self.gfx.clear(Pager.BLACK)
+                self.gfx.flip()
+            except Exception:
+                pass
+            try:
+                self.gfx.cleanup()
+            except Exception:
+                pass
+
+    def _adjust_brightness(self, direction):
+        """Adjust screen brightness. direction: +1 or -1."""
+        cur = self.gfx.get_brightness()
+        max_br = self.gfx.get_max_brightness()
+        new = max(1, min(max_br, cur + direction))
+        if new != cur:
+            self.gfx.set_brightness(new)
 
     def _wait_button(self):
-        """Wait for a button press using thread-safe event queue."""
+        """Wait for a button press using thread-safe event queue.
+        LEFT/RIGHT adjust brightness and are not returned to callers."""
         while True:
             event = self.gfx.get_input_event()
             if event:
                 button, event_type, timestamp = event
                 if event_type == Pager.EVENT_PRESS:
+                    if button == Pager.BTN_LEFT:
+                        self._adjust_brightness(-1)
+                        continue
+                    if button == Pager.BTN_RIGHT:
+                        self._adjust_brightness(1)
+                        continue
                     if button == Pager.BTN_UP:
                         return 'UP'
                     if button == Pager.BTN_DOWN:
                         return 'DOWN'
-                    if button == Pager.BTN_LEFT:
-                        return 'LEFT'
-                    if button == Pager.BTN_RIGHT:
-                        return 'RIGHT'
                     if button == Pager.BTN_A:
                         return 'SELECT'
                     if button == Pager.BTN_B:
@@ -170,9 +192,9 @@ class RagnarMenu:
         self.gfx.clear(Pager.BLACK)
 
         # Title using Viking font
-        self.gfx.draw_ttf_centered(0, "Ragnar", TITLE_COLOR, FONT_VIKING, 48.0)
+        self.gfx.draw_ttf_centered(2, "Ragnar", TITLE_COLOR, FONT_VIKING, 38.0)
 
-        y = 68
+        y = 50
         items = self._get_menu_items(iface_idx, web_ui)
 
         for i, item in enumerate(items):
@@ -188,14 +210,14 @@ class RagnarMenu:
                 label_width = self.gfx.ttf_width(label, FONT_DEJAVU, TTF_MEDIUM)
                 max_value_width = self.gfx.ttf_width(max_value, FONT_DEJAVU, TTF_MEDIUM)
                 total_width = label_width + 8 + max_value_width
-                start_x = (480 - total_width) // 2
+                start_x = max(2, (480 - total_width) // 2)
                 self.gfx.draw_ttf(start_x, y, label, label_color, FONT_DEJAVU, TTF_MEDIUM)
                 self.gfx.draw_ttf(start_x + label_width + 8, y, value, value_color, FONT_DEJAVU, TTF_MEDIUM)
             else:
                 color = SELECTED_COLOR if is_selected else UNSELECTED_COLOR
                 self.gfx.draw_ttf_centered(y, item['label'], color, FONT_DEJAVU, TTF_MEDIUM)
 
-            y += 25
+            y += 22
 
         self.gfx.flip()
 
@@ -205,6 +227,9 @@ class RagnarMenu:
         if self.interfaces:
             iface = self.interfaces[iface_idx]
             iface_text = f"{iface['name']} ({iface['ip']}/{self.scan_prefix})"
+            # Truncate long interface text to fit 480px display
+            if len(iface_text) > 28:
+                iface_text = iface_text[:27] + '\u2026'
         else:
             iface_text = "none"
 
@@ -246,16 +271,6 @@ class RagnarMenu:
             elif btn == 'DOWN':
                 selected = (selected + 1) % num_options
                 self._draw_main_menu(selected, iface_idx, web_ui)
-            elif btn in ['LEFT', 'RIGHT']:
-                if selected == 1 and self.interfaces:
-                    if btn == 'RIGHT':
-                        iface_idx = (iface_idx + 1) % len(self.interfaces)
-                    else:
-                        iface_idx = (iface_idx - 1) % len(self.interfaces)
-                    self._draw_main_menu(selected, iface_idx, web_ui)
-                elif selected == 2:
-                    web_ui = not web_ui
-                    self._draw_main_menu(selected, iface_idx, web_ui)
             elif btn == 'SELECT':
                 if selected == 0:
                     if not self.interfaces:
@@ -296,13 +311,13 @@ class RagnarMenu:
 
         while True:
             self.gfx.clear(Pager.BLACK)
-            self.gfx.draw_ttf_centered(12, "CLEAR DATA", SUBMENU_COLOR, FONT_DEJAVU, TTF_LARGE)
+            self.gfx.draw_ttf_centered(10, "CLEAR DATA", SUBMENU_COLOR, FONT_DEJAVU, TTF_LARGE)
 
-            y = 55
+            y = 42
             for i, opt in enumerate(options):
                 color = SELECTED_COLOR if i == selected else UNSELECTED_COLOR
                 self.gfx.draw_ttf_centered(y, opt, color, FONT_DEJAVU, TTF_MEDIUM)
-                y += 30
+                y += 24
 
             self.gfx.flip()
 
@@ -344,7 +359,7 @@ class RagnarMenu:
             self.gfx.flip()
 
             btn = self._wait_button()
-            if btn in ['LEFT', 'RIGHT', 'UP', 'DOWN']:
+            if btn in ['UP', 'DOWN']:
                 selected = 1 - selected
             elif btn == 'SELECT':
                 return selected == 0
@@ -438,6 +453,9 @@ def main():
             if result is None:
                 menu.cleanup()
                 menu = None
+                # Brief delay lets the hardware fully settle before
+                # pineapplepager service restarts and re-claims the display.
+                time.sleep(0.5)
                 break
 
             menu._show_message("Starting Ragnar...", TITLE_COLOR, result['interface'] + " " + result['ip'], DIM_COLOR)
@@ -490,3 +508,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Explicit sys.exit prevents Python's GC from triggering any further
+    # calls into libpagerctl.so after we've already called pager_cleanup().
+    sys.exit(0)

@@ -256,6 +256,9 @@
                     <button onclick="showTab('network')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="network">
                         Network
                     </button>
+                    <button onclick="showTab('networks')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="networks">
+                        AP Archive
+                    </button>
                     <button onclick="showTab('network-map')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="network-map">
                         Map
                     </button>
@@ -295,7 +298,7 @@
                         </span>
                     </button>
                     <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors requires-display" data-tab="epaper">
-                        E-Paper
+                        Display
                     </button>
                     <button onclick="showTab('files')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="files">
                         Files
@@ -328,6 +331,7 @@
             <div class="px-2 pt-2 pb-3 space-y-1">
                 <button onclick="showTab('dashboard')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Dashboard</button>
                 <button onclick="showTab('network')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Network</button>
+                <button onclick="showTab('networks')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">AP Archive</button>
                 <button onclick="showTab('network-map')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Network Map</button>
                 <button onclick="showTab('discovered')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Discovered</button>
                 <button onclick="showTab('credentials')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Credentials</button>
@@ -340,7 +344,7 @@
                 <button onclick="showTab('threat-intel')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Threat Intel</button>
                 <button onclick="showTab('traffic')" data-tab="traffic" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 server-mode-feature hidden">Traffic Analysis</button>
                 <button onclick="showTab('adv-vuln')" data-tab="adv-vuln" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 server-mode-feature hidden">Adv Scan</button>
-                <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 requires-display">E-Paper</button>
+                <button onclick="showTab('epaper')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 requires-display">Display</button>
                 <button onclick="showTab('files')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Files</button>
                 <button onclick="showTab('system')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">System</button>
                 <button onclick="showTab('connect')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Connect</button>
@@ -456,7 +460,7 @@
                 </div>
 
                 <!-- Scanned Networks Card -->
-                <div class="glass rounded-xl p-6 sm:hover:scale-105 transition-transform cursor-pointer" onclick="showTab('network')">
+                <div class="glass rounded-xl p-6 sm:hover:scale-105 transition-transform cursor-pointer" onclick="showTab('networks')">
                     <div class="flex items-start justify-between">
                         <div>
                             <p class="text-gray-400 text-sm">Scanned Networks</p>
@@ -860,6 +864,49 @@
             </div>
         </div>
         
+        <!-- Networks Tab — All Scanned Networks -->
+        <div id="networks-tab" class="tab-content hidden">
+            <div class="glass rounded-xl p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h2 class="text-2xl font-bold">AP Archive</h2>
+                        <p class="text-sm text-gray-400 mt-1">Every access point Ragnar has collected data on — click one to browse its files</p>
+                    </div>
+                    <button onclick="loadAllNetworksData()" class="refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        Refresh
+                    </button>
+                </div>
+
+                <!-- Network grid -->
+                <div id="networks-list-container">
+                    <div class="text-center text-gray-400 py-12">
+                        <svg class="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+                        </svg>
+                        <p>Loading AP Archive…</p>
+                    </div>
+                </div>
+
+                <!-- Per-network file list (shown when an SSID is clicked) -->
+                <div id="networks-file-panel" class="hidden mt-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <button onclick="closeNetworkFilePanel()" class="text-gray-400 hover:text-white transition-colors flex items-center gap-1 text-sm">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                            </svg>
+                            All APs
+                        </button>
+                        <span class="text-gray-600">/</span>
+                        <h3 id="networks-file-panel-title" class="text-lg font-semibold text-Ragnar-400"></h3>
+                    </div>
+                    <div id="networks-file-list-container"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Network Map Tab -->
         <div id="network-map-tab" class="tab-content hidden">
             <div class="glass rounded-xl p-6">
@@ -1358,6 +1405,128 @@
                 
                 <!-- Live Status Display -->
                 <div id="lynis-audit-status" class="text-sm text-gray-400 mt-2 hidden"></div>
+            </div>
+
+            <!-- AirSnitch Wi-Fi Client Isolation Testing -->
+            <div class="mb-8">
+                <div class="glass rounded-xl p-6">
+                    <h3 class="text-xl font-semibold mb-1 text-green-400 flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+                        </svg>
+                        AirSnitch – Wi-Fi Client Isolation Testing
+                    </h3>
+                    <p class="text-xs text-gray-400 mb-4">Tests whether the Wi-Fi network enforces client isolation. Requires two wireless interfaces. Only run on networks you own or have explicit permission to test.</p>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                        <!-- Config card -->
+                        <div class="bg-slate-800 rounded p-3">
+                            <h5 class="font-medium text-sm mb-2 text-green-300">Configuration</h5>
+                            <div class="space-y-2">
+                                <div class="flex gap-2 items-end">
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-400">Victim interface</label>
+                                        <select id="airsnitch-iface-victim"
+                                            class="w-full bg-slate-700 text-white text-xs px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-green-500 mt-1">
+                                            <option value="wlan1">wlan1</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-400">Attacker interface</label>
+                                        <select id="airsnitch-iface-attacker"
+                                            class="w-full bg-slate-700 text-white text-xs px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-green-500 mt-1">
+                                            <option value="wlan2">wlan2</option>
+                                        </select>
+                                    </div>
+                                    <button onclick="populateAirSnitchInterfaceDropdowns()" title="Refresh interfaces"
+                                        class="bg-slate-600 hover:bg-slate-500 text-white px-2 py-1 rounded text-xs transition-colors mb-0.5">↺</button>
+                                </div>
+                                <div class="flex gap-2">
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-400">Victim SSID</label>
+                                        <input type="text" id="airsnitch-victim-ssid" placeholder="MyNetwork"
+                                            class="w-full bg-slate-700 text-white text-xs px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-green-500 mt-1">
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-400">Victim PSK</label>
+                                        <input type="password" id="airsnitch-victim-psk" placeholder="password"
+                                            class="w-full bg-slate-700 text-white text-xs px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-green-500 mt-1">
+                                    </div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-400">Attacker SSID</label>
+                                        <input type="text" id="airsnitch-attacker-ssid" placeholder="MyNetwork"
+                                            class="w-full bg-slate-700 text-white text-xs px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-green-500 mt-1">
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-400">Attacker PSK</label>
+                                        <input type="password" id="airsnitch-attacker-psk" placeholder="password"
+                                            class="w-full bg-slate-700 text-white text-xs px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-green-500 mt-1">
+                                    </div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <div class="flex-1">
+                                        <label class="text-xs text-gray-400">Server IP (port-steal)</label>
+                                        <input type="text" id="airsnitch-server" value="8.8.8.8" placeholder="8.8.8.8"
+                                            class="w-full bg-slate-700 text-white text-xs px-2 py-1 rounded border border-slate-600 focus:outline-none focus:border-green-500 mt-1">
+                                    </div>
+                                    <div class="flex-1 flex items-end">
+                                        <label class="flex items-center gap-1 text-xs text-gray-400 mb-1 cursor-pointer">
+                                            <input type="checkbox" id="airsnitch-same-bss" class="rounded">
+                                            Same BSS scenario
+                                        </label>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="text-xs text-gray-400 block mb-1">Tests to run</label>
+                                    <div class="flex flex-wrap gap-2">
+                                        <label class="flex items-center gap-1 text-xs text-gray-300 cursor-pointer">
+                                            <input type="checkbox" class="airsnitch-test-check" value="gtk" checked> GTK Abuse
+                                        </label>
+                                        <label class="flex items-center gap-1 text-xs text-gray-300 cursor-pointer">
+                                            <input type="checkbox" class="airsnitch-test-check" value="gateway" checked> Gateway Bouncing
+                                        </label>
+                                        <label class="flex items-center gap-1 text-xs text-gray-300 cursor-pointer">
+                                            <input type="checkbox" class="airsnitch-test-check" value="port_steal_down" checked> Port Steal ↓
+                                        </label>
+                                        <label class="flex items-center gap-1 text-xs text-gray-300 cursor-pointer">
+                                            <input type="checkbox" class="airsnitch-test-check" value="port_steal_up" checked> Port Steal ↑
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Run + install card -->
+                        <div class="bg-slate-800 rounded p-3 flex flex-col gap-2">
+                            <h5 class="font-medium text-sm text-green-300">Run Tests</h5>
+                            <div class="flex gap-2">
+                                <button onclick="runAirSnitch()" id="airsnitch-run-btn"
+                                    class="flex-1 bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded text-sm transition-colors">
+                                    Run AirSnitch
+                                </button>
+                                <button onclick="refreshAirSnitchResults()" id="airsnitch-refresh-btn"
+                                    class="bg-slate-600 hover:bg-slate-500 text-white px-3 py-1.5 rounded text-sm transition-colors" title="Refresh results">↺</button>
+                            </div>
+                            <div id="airsnitch-status" class="text-xs text-gray-400 hidden"></div>
+                            <!-- Install notice (shown when not installed) -->
+                            <div id="airsnitch-install-notice" class="hidden border border-yellow-700 rounded p-2">
+                                <p class="text-xs text-yellow-400 mb-2">AirSnitch is not installed.</p>
+                                <button onclick="installAirSnitch()" id="airsnitch-install-btn"
+                                    class="w-full bg-yellow-700 hover:bg-yellow-600 text-white px-3 py-1 rounded text-xs transition-colors">
+                                    Install from GitHub
+                                </button>
+                                <!-- Install log output -->
+                                <div id="airsnitch-install-log" class="hidden mt-2 bg-slate-900 rounded p-2 text-xs font-mono text-gray-300 max-h-32 overflow-y-auto whitespace-pre-wrap"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Test results panel -->
+                    <div id="airsnitch-results" class="hidden">
+                        <h5 class="font-medium text-sm mb-2 text-green-300">Results</h5>
+                        <div id="airsnitch-results-content" class="bg-slate-900 rounded p-3 text-xs text-gray-300 space-y-1 font-mono overflow-x-auto max-h-48 overflow-y-auto"></div>
+                    </div>
+                </div>
             </div>
 
             <div class="mb-8">
@@ -2406,11 +2575,11 @@
             </div>
         </div>
         
-        <!-- E-Paper Display Tab -->
+        <!-- Display Tab -->
         <div id="epaper-tab" class="tab-content hidden requires-display">
             <div class="glass rounded-xl p-6">
                 <div class="flex items-center justify-between mb-6">
-                    <h2 class="text-2xl font-bold">E-Paper Display</h2>
+                    <h2 class="text-2xl font-bold">Display</h2>
                     <button onclick="refreshEpaperDisplay()" class="refresh-btn bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors">
                         <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
@@ -2458,10 +2627,10 @@
                     </div>
                 </div>
                 
-                <!-- E-Paper Display Image -->
+                <!-- Display Image -->
                 <div class="glass rounded-xl p-6">
                     <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-lg font-semibold text-Ragnar-400">Live E-Paper Display</h3>
+                        <h3 class="text-lg font-semibold text-Ragnar-400">Live Display</h3>
                         <div class="flex items-center space-x-2">
                             <span class="text-sm text-gray-400">Size:</span>
                             <button onclick="toggleEpaperSize()" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-3 py-1 rounded text-sm transition-colors">
@@ -2473,7 +2642,7 @@
                         <div id="epaper-display-container" class="relative inline-block bg-white rounded-lg p-4 shadow-2xl">
                             <img id="epaper-display-image" 
                                  src="" 
-                                 alt="E-Paper Display" 
+                                 alt="Display" 
                                  class="max-w-full h-auto rounded border-2 border-gray-300"
                                  style="max-height: 800px; min-height: 400px; image-rendering: crisp-edges; cursor: pointer;"
                                  onclick="toggleEpaperSize()">
@@ -2489,7 +2658,7 @@
                         </div>
                     </div>
                     <p class="text-center text-gray-400 text-sm mt-4">
-                        This shows the exact same content as your Ragnar device's physical e-paper display<br>
+                        This shows the exact same content as your Ragnar device's physical display<br>
                         <span class="text-Ragnar-400">💡 Click the display image or use the Resize button to cycle through different sizes</span>
                     </p>
                 </div>
@@ -3596,7 +3765,7 @@
                                 Toggle to show/hide Pwnagotchi Bridge configuration options below
                             </div>
                             <div id="pwn-headless-warning" class="text-xs text-amber-300 mt-2 hidden">
-                                Disabled for headless installations. Pwnagotchi requires an e-paper display.
+                                Disabled for headless installations. Pwnagotchi requires a display.
                             </div>
                         </div>
                         
@@ -3785,7 +3954,7 @@
                                 <div class="flex items-center justify-between">
                                     <div>
                                         <label class="text-xs text-gray-400">Display Enabled</label>
-                                        <p class="text-xs text-gray-500">Activate the physical e-ink screen</p>
+                                        <p class="text-xs text-gray-500">Activate the physical display screen</p>
                                     </div>
                                     <label class="relative inline-flex items-center cursor-pointer">
                                         <input type="checkbox" id="pwn-cfg-display-enabled" class="sr-only peer">

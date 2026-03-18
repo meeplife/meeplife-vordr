@@ -1,6 +1,6 @@
 #!/bin/sh
 # Title: Ragnar
-# Description: Autonomous network reconnaissance and security scanning tool for WiFi Pineapple Pager - Network scanning, vulnerability assessment, brute force, and data exfiltration with Viking personality
+# Description: Network recon and security scanner
 # Author: PierreGode / Ragnar Project
 # Version: 1.2
 # Category: Reconnaissance
@@ -59,16 +59,9 @@ done
 
 if [ "$PAGERCTL_FOUND" = false ]; then
     LOG ""
-    LOG "red" "=== MISSING DEPENDENCY ==="
-    LOG ""
     LOG "red" "libpagerctl.so not found!"
     LOG ""
-    LOG "Searched:"
-    for dir in "$PAYLOAD_DIR/lib" "$PAYLOAD_DIR" "/root/lib" "/mmc/root/payloads/user/utilities/PAGERCTL"; do
-        LOG "  $dir"
-    done
-    LOG ""
-    LOG "Install PAGERCTL payload or copy files to:"
+    LOG "Install PAGERCTL payload or copy to:"
     LOG "  $PAYLOAD_DIR/lib/"
     LOG ""
     LOG "Press any button to exit..."
@@ -110,18 +103,14 @@ fi
 
 if [ "$NEED_PYTHON" = true ] || [ "$NEED_CTYPES" = true ]; then
     LOG ""
-    LOG "red" "=== MISSING REQUIREMENT ==="
-    LOG ""
     if [ "$NEED_PYTHON" = true ]; then
-        LOG "Python3 is required to run Ragnar."
+        LOG "red" "Python3 required to run Ragnar."
     else
-        LOG "Python3-ctypes is required to run Ragnar."
+        LOG "red" "Python3-ctypes required."
     fi
-    LOG "All other dependencies are bundled."
     LOG ""
-    LOG "green" "GREEN = Install dependencies (requires internet)"
+    LOG "green" "GREEN = Install (needs internet)"
     LOG "red" "RED   = Exit"
-    LOG ""
 
     while true; do
         BUTTON=$(WAIT_FOR_INPUT 2>/dev/null)
@@ -165,13 +154,20 @@ check_dependencies() {
         LOG ""
         LOG "red" "nmap not found. Installing..."
         opkg update 2>&1 | while IFS= read -r line; do LOG "  $line"; done
-        opkg -d mmc install nmap 2>&1 | while IFS= read -r line; do LOG "  $line"; done
+        opkg -d mmc install nmap nmap-scripts 2>&1 | while IFS= read -r line; do LOG "  $line"; done
 
         if ! command -v nmap >/dev/null 2>&1; then
             LOG "red" "ERROR: nmap installation failed!"
             LOG "Press any button to exit..."
             WAIT_FOR_INPUT >/dev/null 2>&1
             exit 1
+        fi
+    else
+        # nmap present - ensure nmap-scripts (vulners.nse) are installed for vuln scanning
+        if ! nmap --script-help vulners.nse >/dev/null 2>&1; then
+            _log "nmap-scripts not found, installing..."
+            opkg update 2>&1 >> "$LOG_FILE" 2>&1 || true
+            opkg -d mmc install nmap-scripts 2>&1 >> "$LOG_FILE" 2>&1 || true
         fi
     fi
 
@@ -278,12 +274,9 @@ done
 
 if [ "$HAS_NETWORK" = false ]; then
     LOG ""
-    LOG "red" "=== NO NETWORK CONNECTED ==="
+    LOG "red" "No network connected!"
     LOG ""
-    LOG "Ragnar requires a network connection to scan."
-    LOG "Please connect to a network first:"
-    LOG "  - WiFi client mode (wlan0cli)"
-    LOG "  - Ethernet/USB (br-lan)"
+    LOG "Connect WiFi or Ethernet first."
     LOG ""
     LOG "Press any button to exit..."
     WAIT_FOR_INPUT >/dev/null 2>&1
@@ -295,20 +288,12 @@ preflight_python
 
 # Show splash screen
 LOG ""
-LOG "green" "Ragnar"
-LOG "cyan" "https://github.com/PierreGode/Ragnar"
+LOG "green" "Ragnar - Network Recon"
 LOG ""
-LOG "yellow" "Features:"
-LOG "cyan" "  - Automated network reconnaissance"
-LOG "cyan" "  - Port scanning with nmap"
-LOG "cyan" "  - SSH/SMB/FTP/Telnet/RDP/SQL brute force"
-LOG "cyan" "  - File stealing and data exfiltration"
-LOG "cyan" "  - Vulnerability scanning"
-LOG "cyan" "  - Web UI for monitoring"
+LOG "cyan" "Scan / Brute / Exfil / Vuln / Web UI"
 LOG ""
 LOG "green" "GREEN = Start"
 LOG "red" "RED = Exit"
-LOG ""
 
 while true; do
     BUTTON=$(WAIT_FOR_INPUT 2>/dev/null)
