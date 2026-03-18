@@ -154,20 +154,13 @@ check_dependencies() {
         LOG ""
         LOG "red" "nmap not found. Installing..."
         opkg update 2>&1 | while IFS= read -r line; do LOG "  $line"; done
-        opkg -d mmc install nmap nmap-scripts 2>&1 | while IFS= read -r line; do LOG "  $line"; done
+        opkg -d mmc install nmap 2>&1 | while IFS= read -r line; do LOG "  $line"; done
 
         if ! command -v nmap >/dev/null 2>&1; then
             LOG "red" "ERROR: nmap installation failed!"
             LOG "Press any button to exit..."
             WAIT_FOR_INPUT >/dev/null 2>&1
             exit 1
-        fi
-    else
-        # nmap present - ensure nmap-scripts (vulners.nse) are installed for vuln scanning
-        if ! nmap --script-help vulners.nse >/dev/null 2>&1; then
-            _log "nmap-scripts not found, installing..."
-            opkg update 2>&1 >> "$LOG_FILE" 2>&1 || true
-            opkg -d mmc install nmap-scripts 2>&1 >> "$LOG_FILE" 2>&1 || true
         fi
     fi
 

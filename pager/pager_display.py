@@ -83,30 +83,27 @@ ATTACK_SETTINGS = [
 ]
 
 NETWORK_SETTINGS = [
-    {'key': 'manual_mode',                    'label': 'Manual Mode',           'type': 'bool'},
-    {'key': 'blacklistcheck',                 'label': 'MAC Blacklist Check',   'type': 'bool'},
-    {'key': 'network_max_failed_pings',       'label': 'Max Failed Pings',      'type': 'int',  'min': 1,  'max': 100, 'step': 5},
-    {'key': 'network_device_retention_days',  'label': 'Retention Days',        'type': 'int',  'min': 1,  'max': 365, 'step': 1},
-    {'key': 'network_confirmation_scans',     'label': 'Confirm Scans',         'type': 'int',  'min': 1,  'max': 10,  'step': 1},
-    {'key': 'wifi_multi_network_scans_enabled','label': 'Multi-Network Scan',   'type': 'bool'},
-    {'key': 'wifi_monitor_enabled',           'label': 'WiFi Monitor',          'type': 'bool'},
-    {'key': 'wifi_connection_timeout',        'label': 'WiFi Timeout (s)',      'type': 'int',  'min': 10, 'max': 300, 'step': 10},
-    {'key': 'wifi_max_attempts',              'label': 'WiFi Max Attempts',     'type': 'int',  'min': 1,  'max': 10,  'step': 1},
-    {'key': 'ethernet_scan_enabled',          'label': 'Ethernet Scan',         'type': 'bool'},
-    {'key': 'ethernet_prefer_over_wifi',      'label': 'Prefer Ethernet',       'type': 'bool'},
+    # Pager-relevant network settings only — no Ethernet (pager has none)
+    {'key': 'manual_mode',                    'label': 'Manual Mode',         'type': 'bool'},
+    {'key': 'blacklistcheck',                 'label': 'MAC Blacklist',       'type': 'bool'},
+    {'key': 'network_max_failed_pings',       'label': 'Max Failed Pings',    'type': 'int',  'min': 1,  'max': 100, 'step': 5},
+    {'key': 'network_device_retention_days',  'label': 'Host Retention (d)',  'type': 'int',  'min': 1,  'max': 365, 'step': 1},
+    {'key': 'network_confirmation_scans',     'label': 'Confirm Scans',       'type': 'int',  'min': 1,  'max': 10,  'step': 1},
+    {'key': 'wifi_multi_network_scans_enabled','label': 'Multi-Network Scan', 'type': 'bool'},
+    {'key': 'wifi_monitor_enabled',           'label': 'WiFi Monitor',        'type': 'bool'},
+    {'key': 'wifi_connection_timeout',        'label': 'WiFi Timeout (s)',    'type': 'int',  'min': 10, 'max': 300, 'step': 10},
+    {'key': 'wifi_max_attempts',              'label': 'WiFi Max Attempts',   'type': 'int',  'min': 1,  'max': 10,  'step': 1},
 ]
 
 SYSTEM_SETTINGS = [
-    {'key': 'websrv',                      'label': 'Web Server',           'type': 'bool'},
-    {'key': 'ai_enabled',                  'label': 'AI Enabled',           'type': 'bool'},
-    {'key': 'pushover_enabled',            'label': 'Push Notifications',   'type': 'bool'},
-    {'key': 'debug_mode',                  'label': 'Debug Mode',           'type': 'bool'},
-    {'key': 'network_intelligence_enabled','label': 'Net Intelligence',     'type': 'bool'},
-    {'key': 'release_gate_enabled',        'label': 'Release Gate',         'type': 'bool'},
-    {'key': 'startup_delay',               'label': 'Startup Delay (s)',    'type': 'int',  'min': 0, 'max': 60,  'step': 1},
-    {'key': 'comment_delaymin',            'label': 'Comment Delay Min',    'type': 'int',  'min': 5, 'max': 120, 'step': 5},
-    {'key': 'comment_delaymax',            'label': 'Comment Delay Max',    'type': 'int',  'min': 5, 'max': 120, 'step': 5},
-    {'key': 'livestatus_delay',            'label': 'Livestatus Delay (s)', 'type': 'int',  'min': 1, 'max': 60,  'step': 1},
+    # Pager-relevant system settings only.
+    # Web server is controlled by the startup menu (RAGNAR_WEB_UI env var), not this config.
+    {'key': 'ai_enabled',      'label': 'AI Features',        'type': 'bool'},
+    {'key': 'pushover_enabled','label': 'Push Notifications', 'type': 'bool'},
+    {'key': 'debug_mode',      'label': 'Debug Mode',         'type': 'bool'},
+    {'key': 'startup_delay',   'label': 'Startup Delay (s)',  'type': 'int',  'min': 0, 'max': 60,  'step': 1},
+    {'key': 'comment_delaymin','label': 'Comment Freq Min',   'type': 'int',  'min': 5, 'max': 120, 'step': 5},
+    {'key': 'comment_delaymax','label': 'Comment Freq Max',   'type': 'int',  'min': 5, 'max': 120, 'step': 5},
 ]
 
 SETTINGS_MAP = {
@@ -813,29 +810,37 @@ class PagerDisplay:
             current = int(self.shared_data.config.get(key, min_val))
             current = max(min_val, min(max_val, current))
 
+            # Dialog box: 400w x 148h, centred on 480x222
+            DW, DH = 400, 148
+            DX = (self.width - DW) // 2    # 40
+            DY = (self.height - DH) // 2   # 37
+
             def draw():
-                # Semi-transparent overlay via dark fill
-                self.pager.fill_rect(40, 50, self.width - 80, 122, self.CARD_BG)
-                self.pager.rect(40, 50, self.width - 80, 122, self.CYAN)
-                self.pager.rect(42, 52, self.width - 84, 118, self.DARK_GRAY)
+                # Box
+                self.pager.fill_rect(DX, DY, DW, DH, self.CARD_BG)
+                self.pager.rect(DX, DY, DW, DH, self.CYAN)
+                self.pager.rect(DX + 2, DY + 2, DW - 4, DH - 4, self.DARK_GRAY)
 
-                # Title
-                lw = self.pager.ttf_width(label[:24], self.font_arial, 13)
-                self.pager.draw_ttf((self.width - lw) // 2, 60, label[:24], self.WHITE, self.font_arial, 13)
+                # Label — 16px (TTF_MEDIUM), readable
+                lw = self.pager.ttf_width(label[:28], self.font_arial, 16)
+                self.pager.draw_ttf((self.width - lw) // 2, DY + 10, label[:28],
+                                    self.WHITE, self.font_arial, 16)
 
-                # Value display (large)
+                # Value — 36px, very prominent
                 val_str = str(current)
-                vw = self.pager.ttf_width(val_str, self.font_arial, 28)
-                self.pager.draw_ttf((self.width - vw) // 2, 88, val_str, self.CYAN, self.font_arial, 28)
+                vw = self.pager.ttf_width(val_str, self.font_arial, 36)
+                self.pager.draw_ttf((self.width - vw) // 2, DY + 38, val_str,
+                                    self.CYAN, self.font_arial, 36)
 
-                # Range hint
-                hint = f"Range: {min_val} - {max_val}  Step: {step}"
-                hw = self.pager.ttf_width(hint, self.font_arial, 10)
-                self.pager.draw_ttf((self.width - hw) // 2, 128, hint, self.GRAY, self.font_arial, 10)
+                # Range hint — 13px (TTF_SMALL)
+                hint = f"{min_val} - {max_val}   step {step}"
+                hw = self.pager.ttf_width(hint, self.font_arial, 13)
+                self.pager.draw_ttf((self.width - hw) // 2, DY + 94, hint,
+                                    self.GRAY, self.font_arial, 13)
 
-                # Button hints
-                self.pager.draw_ttf_centered(148, "UP/DOWN: adjust   A: save   B: cancel",
-                                             self.GRAY, self.font_arial, 10)
+                # Button hints — 13px
+                self.pager.draw_ttf_centered(DY + 118, "UP: increase   DOWN: decrease   A: save   B: cancel",
+                                             self.GRAY, self.font_arial, 13)
                 self.pager.flip()
 
             draw()
@@ -868,24 +873,35 @@ class PagerDisplay:
             except ValueError:
                 selected = 0
 
-            def draw():
-                self.pager.fill_rect(50, 40, self.width - 100, 30 + len(choices) * 26 + 30, self.CARD_BG)
-                self.pager.rect(50, 40, self.width - 100, 30 + len(choices) * 26 + 30, self.CYAN)
+            # Each option row: 28px.  Dialog: label(28) + options + hint(22)
+            OPT_H = 28
+            DW = 340
+            DH = 30 + len(choices) * OPT_H + 26   # e.g. 5 choices → 196px
+            DX = (self.width - DW) // 2
+            DY = max(4, (self.height - DH) // 2)
 
-                lw = self.pager.ttf_width(label[:24], self.font_arial, 13)
-                self.pager.draw_ttf((self.width - lw) // 2, 48, label[:24], self.WHITE, self.font_arial, 13)
+            def draw():
+                self.pager.fill_rect(DX, DY, DW, DH, self.CARD_BG)
+                self.pager.rect(DX, DY, DW, DH, self.CYAN)
+
+                # Label — 16px
+                lw = self.pager.ttf_width(label[:26], self.font_arial, 16)
+                self.pager.draw_ttf((self.width - lw) // 2, DY + 7, label[:26],
+                                    self.WHITE, self.font_arial, 16)
 
                 for i, choice in enumerate(choices):
-                    cy = 72 + i * 26
+                    cy = DY + 30 + i * OPT_H
                     if i == selected:
-                        self.pager.fill_rect(56, cy - 2, self.width - 112, 24, self.BLUE)
-                    cw = self.pager.ttf_width(choice, self.font_arial, 14)
+                        self.pager.fill_rect(DX + 4, cy - 2, DW - 8, OPT_H - 2, self.BLUE)
+                    cw = self.pager.ttf_width(choice, self.font_arial, 16)
                     color = self.WHITE if i == selected else self.LIGHT_GRAY
-                    self.pager.draw_ttf((self.width - cw) // 2, cy, choice, color, self.font_arial, 14)
+                    self.pager.draw_ttf((self.width - cw) // 2, cy + 4, choice,
+                                        color, self.font_arial, 16)
 
-                hint_y = 76 + len(choices) * 26
+                # Hint — 13px
+                hint_y = DY + DH - 22
                 self.pager.draw_ttf_centered(hint_y, "UP/DOWN: select   A: save   B: cancel",
-                                             self.GRAY, self.font_arial, 10)
+                                             self.GRAY, self.font_arial, 13)
                 self.pager.flip()
 
             draw()
@@ -938,69 +954,78 @@ class PagerDisplay:
         return self.CYAN
 
     def _draw_settings_screen(self, screen_id, title):
-        """Generic renderer for settings screens."""
+        """Generic renderer for settings screens.
+
+        Font sizes match pager_menu.py's tuned values for 480x222:
+          labels/values: 16px (TTF_MEDIUM — proven readable on this screen)
+          bottom hint:   13px (TTF_SMALL)
+        Row height 28px gives 6 visible rows in the content area.
+        """
         self.pager.clear(self.DARK_BG)
         self._draw_screen_header(title)
 
         settings = self._get_settings_for_screen(screen_id)
         if not settings:
-            self.pager.draw_ttf_centered(100, "No settings available", self.GRAY, self.font_arial, 14)
+            self.pager.draw_ttf_centered(100, "No settings available", self.GRAY, self.font_arial, 20)
             return
 
-        ROW_H = 26
-        header_h = 26
-        y_start = header_h + 2
-        visible = (self.height - y_start - 2) // ROW_H
-        scroll = self._settings_scroll.get(screen_id, 0)
-        selected = self._settings_selected.get(screen_id, 0)
+        # Layout constants — tuned for 480x222 with 24px header + 18px hint bar
+        ROW_H = 28          # 28px per row → 6 rows in 168px content area
+        HINT_H = 18         # bottom hint bar height
+        y_start = 26        # immediately after 24px header + 2px gap
+        content_h = self.height - y_start - HINT_H
+        visible = content_h // ROW_H   # = 168 // 28 = 6
 
         # Column positions
-        LABEL_X = 8
-        VALUE_X = 320
-        TYPE_X = 450
+        SEL_X = 4           # ">" selection arrow
+        LABEL_X = 20        # setting label start
+        VALUE_X = 330       # current value (right side)
+        DOT_X = self.width - 10   # type-indicator dot
 
-        # Column headers (small, gray)
-        self.pager.draw_ttf(LABEL_X, y_start, "SETTING", self.DARK_GRAY, self.font_arial, 10)
-        self.pager.draw_ttf(VALUE_X, y_start, "VALUE", self.DARK_GRAY, self.font_arial, 10)
-        y_start += 14
+        scroll = self._settings_scroll.get(screen_id, 0)
+        selected = self._settings_selected.get(screen_id, 0)
 
         for i in range(scroll, min(scroll + visible, len(settings))):
             s = settings[i]
             row_y = y_start + (i - scroll) * ROW_H
+            is_selected = (i == selected)
 
             # Row background
-            is_selected = (i == selected)
             if is_selected:
                 self.pager.fill_rect(2, row_y, self.width - 4, ROW_H - 2, self.BLUE)
             elif (i - scroll) % 2 == 0:
                 self.pager.fill_rect(2, row_y, self.width - 4, ROW_H - 2, self.CARD_BG)
 
-            # Label
-            label_color = self.WHITE if is_selected else self.LIGHT_GRAY
-            self.pager.draw_ttf(LABEL_X, row_y + 5, s['label'][:30], label_color, self.font_arial, 13)
+            # Selection arrow
+            if is_selected:
+                self.pager.draw_ttf(SEL_X, row_y + 6, ">", self.CYAN, self.font_arial, 14)
 
-            # Value
+            # Label — 16px, same as pager_menu TTF_MEDIUM
+            label_color = self.WHITE if is_selected else self.LIGHT_GRAY
+            self.pager.draw_ttf(LABEL_X, row_y + 6, s['label'][:26], label_color, self.font_arial, 16)
+
+            # Value — 16px, color-coded by meaning
             val_str = self._get_setting_value_str(s)
             val_color = self._get_setting_value_color(s) if not is_selected else self.WHITE
-            self.pager.draw_ttf(VALUE_X, row_y + 5, val_str[:14], val_color, self.font_arial, 13)
+            self.pager.draw_ttf(VALUE_X, row_y + 6, val_str[:10], val_color, self.font_arial, 16)
 
-            # Type indicator (small dot)
+            # Small type-indicator dot (green=bool, cyan=int, yellow=choice)
             type_colors = {'bool': self.GREEN, 'int': self.CYAN, 'choice': self.YELLOW}
-            dot_color = type_colors.get(s['type'], self.GRAY)
-            self.pager.fill_rect(TYPE_X, row_y + 10, 5, 5, dot_color)
+            self.pager.fill_rect(DOT_X, row_y + 11, 5, 5, type_colors.get(s['type'], self.GRAY))
 
-        # Scroll indicator
+        # Scroll bar
         total = len(settings)
         if total > visible:
-            sb_h = max(8, int((self.height - y_start - 2) * visible / total))
-            sb_y = y_start + int((self.height - y_start - 2 - sb_h) * scroll / max(1, total - visible))
+            sb_area = content_h
+            sb_h = max(10, int(sb_area * visible / total))
+            sb_y = y_start + int((sb_area - sb_h) * scroll / max(1, total - visible))
             self.pager.fill_rect(self.width - 3, sb_y, 2, sb_h, self.GRAY)
 
-        # Bottom hint bar
-        hint_y = self.height - 14
-        self.pager.fill_rect(0, hint_y, self.width, 14, self.HEADER_BG)
-        self.pager.draw_ttf_centered(hint_y + 2, "UP/DOWN: select   A: edit/toggle   B: menu",
-                                     self.GRAY, self.font_arial, 10)
+        # Bottom hint bar — 13px (TTF_SMALL), readable without eating row space
+        hint_y = self.height - HINT_H
+        self.pager.fill_rect(0, hint_y, self.width, HINT_H, self.HEADER_BG)
+        self.pager.draw_ttf_centered(hint_y + 2, "UP/DN: select   A: edit/toggle   B: menu",
+                                     self.GRAY, self.font_arial, 13)
 
     # ------------------------------------------------------------------
     # Pause menu (kept from original)
