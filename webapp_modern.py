@@ -7011,6 +7011,42 @@ def stash_and_update():
         'update_output': update_result['output']
     })
 
+@app.route('/api/system/resolve-conflicts', methods=['POST'])
+def resolve_git_conflicts():
+    """Resolve git merge conflicts by resetting to HEAD then pulling latest."""
+    repo_path = os.getcwd()
+    try:
+        # Hard reset clears both the index (staged conflicts) and working tree
+        subprocess.run(
+            ['git', 'reset', '--hard', 'HEAD'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info("Git reset --hard HEAD completed")
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.strip() or e.stdout.strip() or str(e)
+        logger.error(f"Git reset failed: {error_msg}")
+        return jsonify({'success': False, 'error': f'Git reset failed: {error_msg}'}), 500
+
+    update_result = _execute_git_update(repo_path)
+    if not update_result['success']:
+        return jsonify({
+            'success': False,
+            'error': update_result['error'] or 'Git pull failed after reset',
+            'warnings': update_result['warnings']
+        }), 500
+
+    _schedule_service_restart()
+    return jsonify({
+        'success': True,
+        'message': 'Conflicts resolved and update applied successfully.',
+        'output': update_result['output'],
+        'warnings': update_result['warnings']
+    })
+
+
 @app.route('/api/system/fix-git', methods=['POST'])
 def fix_git_safe_directory():
     """Fix git safe directory issue"""

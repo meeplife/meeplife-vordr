@@ -11,7 +11,10 @@ import traceback
 import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 import socket
 import subprocess
 import re
@@ -28,10 +31,13 @@ import time
 import glob
 import logging
 from datetime import datetime
-from rich.console import Console
-from rich.table import Table
-from rich.text import Text
-from rich.progress import Progress
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.text import Text
+    from rich.progress import Progress
+except ImportError:
+    Console = Table = Text = Progress = None
 # MAC address getter with fallback
 def gma(*args, **kwargs):
     try:
@@ -50,8 +56,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared import SharedData
 from logger import Logger
 import ipaddress
-import nmap
-from nmap_logger import nmap_logger
+try:
+    import nmap
+except ImportError:
+    nmap = None
+try:
+    from nmap_logger import nmap_logger
+except ImportError:
+    nmap_logger = None
 from db_manager import get_db
 
 logger = Logger(name="scanning.py", level=logging.DEBUG)
@@ -74,7 +86,7 @@ class NetworkScanner:
         self.blacklistcheck = shared_data.blacklistcheck
         self.mac_scan_blacklist = shared_data.mac_scan_blacklist
         self.ip_scan_blacklist = shared_data.ip_scan_blacklist
-        self.console = Console()
+        self.console = Console() if Console else None
         self.lock = threading.Lock()
         self.currentdir = shared_data.currentdir
         # CRITICAL: Pi Zero W2 has limited resources - use conservative thread count
@@ -84,12 +96,46 @@ class NetworkScanner:
         self.port_scan_workers = max(2, min(6, cpu_count))
         self.host_scan_workers = max(2, min(6, cpu_count))
         self.semaphore = threading.Semaphore(min(4, max(1, cpu_count // 2 or 1)))
-        self.nm = nmap.PortScanner()  # Initialize nmap.PortScanner()
+        self.nm = nmap.PortScanner() if nmap else None  # Initialize nmap.PortScanner()
         self.running = False
-        self.arp_scan_interface = "wlan0"
+        self.arp_scan_interface = self._detect_default_interface()
         self._active_scan_network = None
         # Initialize SQLite database manager
         self.db = get_db(currentdir=self.currentdir)
+
+    @staticmethod
+    def _detect_default_interface():
+        """Detect the active network interface using ip route."""
+        try:
+            result = subprocess.run(
+                ['ip', 'route', 'show', 'default'],
+                capture_output=True, text=True, timeout=5
+            )
+            # Parse: default via 172.16.52.1 dev br-lan ...
+            for line in result.stdout.strip().splitlines():
+                parts = line.split()
+                if 'dev' in parts:
+                    idx = parts.index('dev')
+                    if idx + 1 < len(parts):
+                        return parts[idx + 1]
+        except Exception:
+            pass
+        # Fallback: find first non-lo interface with an IP
+        try:
+            result = subprocess.run(
+                ['ip', '-o', '-4', 'addr', 'show'],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.strip().splitlines():
+                # Format: 3: br-lan    inet 172.16.52.1/24 brd ...
+                parts = line.split()
+                if len(parts) >= 4 and '127.0.0.1' not in line:
+                    iface = parts[1].rstrip(':')
+                    if iface != 'lo':
+                        return iface
+        except Exception:
+            pass
+        return 'wlan0'
 
     @staticmethod
     def _is_valid_mac(value):
@@ -146,12 +192,13 @@ class NetworkScanner:
 
         return hosts
 
-    def run_arp_scan(self):
+    def run_arp_scan(self, network=None):
         """Execute arp-scan to get MAC addresses and vendor information for local network hosts."""
         # Try both --localnet and explicit subnet scanning for comprehensive MAC discovery
+        subnet = str(network) if network else '192.168.1.0/24'
         commands = [
             ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '--localnet'],
-            ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '192.168.1.0/24']
+            ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', subnet]
         ]
         
         all_hosts = {}
@@ -470,7 +517,7 @@ class NetworkScanner:
                     target_cidrs.append('192.168.1.0/24')
 
             self.logger.info(f"🚀 Initial ping sweep requested across {', '.join(target_cidrs)}")
-            arp_hosts = self.run_arp_scan() if include_arp_scan else {}
+            arp_hosts = self.run_arp_scan(network=network) if include_arp_scan else {}
             ping_results = self._ping_sweep_missing_hosts(
                 arp_hosts,
                 target_cidrs=target_cidrs
@@ -753,6 +800,8 @@ class NetworkScanner:
         """
         Displays the contents of the specified CSV file using Rich for enhanced visualization.
         """
+        if not Table or not self.console:
+            return
         with self.lock:
             try:
                 table = Table(title=f"Contents of {file_path}", show_lines=True)
@@ -778,7 +827,41 @@ class NetworkScanner:
                 self.logger.info(f"Network (override): {network}")
                 return network
             if netifaces is None:
-                # Fallback to a common private network range if netifaces is not available
+                # Fallback: detect network from ip commands
+                try:
+                    result = subprocess.run(
+                        ['ip', '-o', '-4', 'addr', 'show', self.arp_scan_interface],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    for line in result.stdout.strip().splitlines():
+                        # Format: 3: br-lan    inet 172.16.52.1/24 brd ...
+                        parts = line.split()
+                        for i, p in enumerate(parts):
+                            if p == 'inet' and i + 1 < len(parts):
+                                cidr = parts[i + 1]  # e.g. 172.16.52.1/24
+                                network = ipaddress.IPv4Network(cidr, strict=False)
+                                self.logger.info(f"Network (from {self.arp_scan_interface}): {network}")
+                                return network
+                except Exception as e:
+                    self.logger.warning(f"Failed to detect network from ip command: {e}")
+                # Last resort: try any non-loopback interface
+                try:
+                    result = subprocess.run(
+                        ['ip', '-o', '-4', 'addr', 'show'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    for line in result.stdout.strip().splitlines():
+                        if '127.0.0.1' in line:
+                            continue
+                        parts = line.split()
+                        for i, p in enumerate(parts):
+                            if p == 'inet' and i + 1 < len(parts):
+                                cidr = parts[i + 1]
+                                network = ipaddress.IPv4Network(cidr, strict=False)
+                                self.logger.info(f"Network (detected): {network}")
+                                return network
+                except Exception as e:
+                    self.logger.warning(f"Failed to detect any network: {e}")
                 self.logger.warning("netifaces not available, using default network range")
                 network = ipaddress.IPv4Network("192.168.1.0/24", strict=False)
                 self.logger.info(f"Network (default): {network}")
@@ -1082,7 +1165,7 @@ class NetworkScanner:
             """
             self.logger.info("🎯 Phase 1: Getting MAC addresses via arp-scan")
             # Get MAC addresses and vendor info from arp-scan (writes to DB internally)
-            self.arp_hosts = self.outer_instance.run_arp_scan()
+            self.arp_hosts = self.outer_instance.run_arp_scan(network=self.network)
             
             self.logger.info("🎯 Phase 2: Network-wide nmap scan for hosts and ports")
             # Run nmap network-wide scan for host discovery AND port scanning (writes to DB internally)
@@ -1219,20 +1302,34 @@ class NetworkScanner:
         """
         Helper class to update the live status of hosts and clean up scan results.
         """
-        def __init__(self, source_csv_path, output_csv_path):
+        def __init__(self, source_csv_path, output_csv_path, db=None):
             self.logger = logger
             self.source_csv_path = source_csv_path
             self.output_csv_path = output_csv_path
+            self.db = db
             # Initialize default values in case of errors
-            self.df = pd.DataFrame()
+            self.df = pd.DataFrame() if pd else None
             self.total_open_ports = 0
             self.alive_hosts_count = 0
             self.all_known_hosts_count = 0
 
         def read_csv(self):
             """
-            Reads the source CSV file into a DataFrame.
+            Reads the source CSV file into a DataFrame (or list of dicts if pandas unavailable).
             """
+            if pd is None:
+                # Fallback: use csv module
+                self._rows = []
+                try:
+                    if not os.path.exists(self.source_csv_path) or os.path.getsize(self.source_csv_path) == 0:
+                        return
+                    with open(self.source_csv_path, 'r') as f:
+                        reader = csv.DictReader(f)
+                        self._rows = list(reader)
+                    self.logger.debug(f"Read {len(self._rows)} rows from {self.source_csv_path} (csv fallback)")
+                except Exception as e:
+                    self.logger.error(f"Error reading CSV (fallback): {e}")
+                return
             try:
                 if not os.path.exists(self.source_csv_path):
                     self.logger.warning(f"Source CSV file does not exist: {self.source_csv_path}")
@@ -1285,11 +1382,19 @@ class NetworkScanner:
             Calculates the total number of open ports for alive hosts.
             """
             try:
-                # Initialize default value
                 self.total_open_ports = 0
+
+                # csv fallback path (no pandas)
+                if pd is None:
+                    for row in getattr(self, '_rows', []):
+                        if row.get('Alive', '0').strip() == '1':
+                            ports = row.get('Ports', '')
+                            if ports:
+                                self.total_open_ports += len([p for p in ports.split(';') if p.strip()])
+                    return
                 
                 # Check if DataFrame is valid and has required columns
-                if self.df.empty or 'Alive' not in self.df.columns or 'Ports' not in self.df.columns:
+                if self.df is None or self.df.empty or 'Alive' not in self.df.columns or 'Ports' not in self.df.columns:
                     self.logger.warning("DataFrame is empty or missing required columns for port calculation")
                     return
 
@@ -1320,12 +1425,21 @@ class NetworkScanner:
             Calculates the total and alive host counts.
             """
             try:
-                # Initialize default values
                 self.all_known_hosts_count = 0
                 self.alive_hosts_count = 0
+
+                # csv fallback path (no pandas)
+                if pd is None:
+                    for row in getattr(self, '_rows', []):
+                        mac = row.get('MAC Address', '')
+                        if mac != 'STANDALONE':
+                            self.all_known_hosts_count += 1
+                        if row.get('Alive', '0').strip() == '1':
+                            self.alive_hosts_count += 1
+                    return
                 
                 # Check if DataFrame is valid and has required columns
-                if self.df.empty or 'MAC Address' not in self.df.columns or 'Alive' not in self.df.columns:
+                if self.df is None or self.df.empty or 'MAC Address' not in self.df.columns or 'Alive' not in self.df.columns:
                     self.logger.warning("DataFrame is empty or missing required columns for host count calculation")
                     return
                 
@@ -1345,9 +1459,7 @@ class NetworkScanner:
 
         def save_results(self):
             """
-            Logs the calculated scan statistics.
-            Statistics are now available from the SQLite database via db.get_stats()
-            CSV results file is no longer needed - this method kept for compatibility.
+            Logs the calculated scan statistics and writes them to the output CSV.
             """
             try:
                 # Ensure all required attributes exist with default values
@@ -1358,10 +1470,18 @@ class NetworkScanner:
                 if not hasattr(self, 'all_known_hosts_count'):
                     self.all_known_hosts_count = 0
                 
-                # Simply log the statistics - they're already in SQLite
                 self.logger.info(f"📊 Scan Results - Total Open Ports: {self.total_open_ports}, "
                                f"Alive Hosts: {self.alive_hosts_count}, "
                                f"All Known Hosts: {self.all_known_hosts_count}")
+
+                # Write to livestatus CSV so the display picks up the values
+                try:
+                    with open(self.output_csv_path, 'w', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(['Total Open Ports', 'Alive Hosts Count', 'All Known Hosts Count', 'Vulnerabilities Count'])
+                        writer.writerow([self.total_open_ports, self.alive_hosts_count, self.all_known_hosts_count, 0])
+                except Exception as csv_err:
+                    self.logger.error(f"Error writing livestatus CSV: {csv_err}")
                 
             except Exception as e:
                 self.logger.error(f"Error in save_results: {e}")
@@ -1372,6 +1492,13 @@ class NetworkScanner:
             Updates the live status of hosts and saves the results.
             """
             try:
+                # Try SQLite first — more reliable than CSV parsing
+                if self.db and self._update_from_db():
+                    self.save_results()
+                    self.logger.info("Livestatus updated (from database)")
+                    self.logger.info(f"Results saved to {self.output_csv_path}")
+                    return
+
                 self.read_csv()
                 self.calculate_open_ports()
                 self.calculate_hosts_counts()
@@ -1380,6 +1507,26 @@ class NetworkScanner:
                 self.logger.info(f"Results saved to {self.output_csv_path}")
             except Exception as e:
                 self.logger.error(f"Error in update_livestatus: {e}")
+
+        def _update_from_db(self):
+            """Calculate stats directly from SQLite database."""
+            try:
+                hosts = self.db.get_all_hosts()
+                if not hosts:
+                    return False
+                self.all_known_hosts_count = len([h for h in hosts if h.get('mac') != 'STANDALONE'])
+                self.alive_hosts_count = len([h for h in hosts if h.get('status') == 'alive'])
+                total_ports = 0
+                for h in hosts:
+                    if h.get('status') == 'alive':
+                        ports_str = h.get('ports', '')
+                        if ports_str:
+                            total_ports += len([p for p in ports_str.split(',') if p.strip()])
+                self.total_open_ports = total_ports
+                return True
+            except Exception as e:
+                self.logger.warning(f"Could not read stats from database: {e}")
+                return False
         
         def clean_scan_results(self, scan_results_dir):
             """
@@ -1440,21 +1587,23 @@ class NetworkScanner:
                 else:
                     alive_macs.add(mac)
 
-            table = Table(title="Scan Results", show_lines=True)
-            table.add_column("IP", style="cyan", no_wrap=True)
-            table.add_column("Hostname", style="cyan", no_wrap=True)
-            table.add_column("Alive", style="cyan", no_wrap=True)
-            table.add_column("MAC Address", style="cyan", no_wrap=True)
-            for port in all_ports:
-                table.add_column(f"{port}", style="green")
+            table = Table(title="Scan Results", show_lines=True) if Table else None
+            if table:
+                table.add_column("IP", style="cyan", no_wrap=True)
+                table.add_column("Hostname", style="cyan", no_wrap=True)
+                table.add_column("Alive", style="cyan", no_wrap=True)
+                table.add_column("MAC Address", style="cyan", no_wrap=True)
+                for port in all_ports:
+                    table.add_column(f"{port}", style="green")
 
             netkb_data = []
             for ip, ports, hostname, mac in zip(ip_data.ip_list, open_ports.values(), ip_data.hostname_list, ip_data.mac_list):
                 if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
                     continue
                 alive = '1' if mac in alive_macs else '0'
-                row = [ip, hostname, alive, mac] + [Text(str(port), style="green bold") if port in ports else Text("", style="on red") for port in all_ports]
-                table.add_row(*row)
+                if table and Text:
+                    row = [ip, hostname, alive, mac] + [Text(str(port), style="green bold") if port in ports else Text("", style="on red") for port in all_ports]
+                    table.add_row(*row)
                 netkb_data.append([mac, ip, hostname, ports])
 
             with self.lock:
@@ -1470,6 +1619,7 @@ class NetworkScanner:
             self.update_netkb(netkbfile, netkb_data, alive_macs)
 
             # Log primary-subnet result
+            primary_net = str(network) if network else None
             primary_host_count = len(ip_data.ip_list) if ip_data else 0
             self.shared_data.append_subnet_scan_log(
                 primary_net or 'primary',
@@ -1487,7 +1637,6 @@ class NetworkScanner:
             extra_subnets = getattr(self.shared_data, 'scan_subnets', None) or []
             if not extra_subnets:
                 extra_subnets = self.shared_data.config.get('scan_subnets', [])
-            primary_net = str(network) if network else None
             for extra_cidr in extra_subnets:
                 extra_cidr = str(extra_cidr).strip()
                 if not extra_cidr:
@@ -1569,7 +1718,7 @@ class NetworkScanner:
             source_csv_path = self.shared_data.netkbfile
             output_csv_path = self.shared_data.livestatusfile
 
-            updater = self.LiveStatusUpdater(source_csv_path, output_csv_path)
+            updater = self.LiveStatusUpdater(source_csv_path, output_csv_path, db=self.db)
             updater.update_livestatus()
             updater.clean_scan_results(self.shared_data.scan_results_dir)
         except Exception as e:

@@ -1359,7 +1359,7 @@ BANNER
         echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Raspberry Pi with TFT LCD display              ${NC}"
         echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} Server install with display                    ${NC}"
         echo -e "   ${CYAN}*${YELLOW} 4)${CYAN} Server install (headless, no display)           ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 5)${CYAN} WiFi Pineapple Pager ${RED}(WIP)                    ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 5)${CYAN} WiFi Pineapple Pager ${RED}(beta)                    ${NC}"
     else
         echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Server install with display                    ${NC}"
         echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install (headless, no display)           ${NC}"

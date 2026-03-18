@@ -1,5 +1,12 @@
 [
     {
+        "b_module": "scanning",
+        "b_class": "NetworkScanner",
+        "b_port": null,
+        "b_status": "network_scanner",
+        "b_parent": null
+    },
+    {
         "b_module": "airsnitch",
         "b_class": "AirSnitch",
         "b_port": null,

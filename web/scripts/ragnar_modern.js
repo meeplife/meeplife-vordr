@@ -5194,16 +5194,16 @@ async function checkForUpdates() {
 
         if (gitStatus.has_conflicts) {
             if (updateBtn) {
-                updateBtn.disabled = true;
-                updateBtn.onclick = null;
-                updateBtn.className = 'w-full bg-red-700 text-white py-2 px-4 rounded cursor-not-allowed';
+                updateBtn.disabled = false;
+                updateBtn.onclick = resolveGitConflicts;
+                updateBtn.className = 'w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded transition-colors';
                 updateElement('update-btn-text', 'Resolve Git Conflicts');
             }
             updateElement('update-status', 'Local Conflict');
             if (updateStatusEl) {
                 updateStatusEl.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-200';
             }
-            addConsoleMessage('Local git conflicts detected. Resolve them before updating.', 'error');
+            addConsoleMessage('Local git conflicts detected. Click "Resolve Git Conflicts" to reset and update.', 'warning');
             return;
         }
 
@@ -5275,6 +5275,34 @@ async function fixGitConfig() {
         const updateBtn = document.getElementById('update-btn');
         updateBtn.disabled = false;
         updateElement('update-btn-text', 'Fix Git Config');
+    }
+}
+
+async function resolveGitConflicts() {
+    const updateBtn = document.getElementById('update-btn');
+    try {
+        updateBtn.disabled = true;
+        updateElement('update-btn-text', 'Resolving...');
+        addConsoleMessage('Resolving git conflicts and pulling latest update...', 'info');
+
+        const result = await postAPI('/api/system/resolve-conflicts', {});
+
+        if (result.success) {
+            addConsoleMessage('Conflicts resolved and update applied. Restarting...', 'success');
+            if (result.warnings && result.warnings.length) {
+                result.warnings.forEach(w => addConsoleMessage(w, 'warning'));
+            }
+            updateElement('update-btn-text', 'Done');
+        } else {
+            addConsoleMessage(`Failed to resolve conflicts: ${result.error}`, 'error');
+            updateBtn.disabled = false;
+            updateElement('update-btn-text', 'Resolve Git Conflicts');
+        }
+    } catch (error) {
+        console.error('Error resolving git conflicts:', error);
+        addConsoleMessage('Failed to resolve git conflicts', 'error');
+        updateBtn.disabled = false;
+        updateElement('update-btn-text', 'Resolve Git Conflicts');
     }
 }
 

@@ -311,10 +311,22 @@ class PagerDisplay:
         except Exception as e:
             logger.debug(f"Error reading creds: {e}")
 
-        # Vulnerabilities from vulnerability_summary.csv
+        # Vulnerabilities from SQLite DB (primary) or vulnerability_summary.csv (fallback)
         self._vulns_data = []
         try:
-            if os.path.exists(self.shared_data.vuln_summary_file):
+            if self.shared_data.db is not None:
+                for h in self.shared_data.db.get_all_hosts():
+                    if h.get('mac') == 'STANDALONE':
+                        continue
+                    vulns = h.get('vulnerabilities', '')
+                    if vulns:
+                        self._vulns_data.append({
+                            'ip': h.get('ip', '?'),
+                            'hostname': h.get('hostname', ''),
+                            'port': h.get('ports', ''),
+                            'vulns': vulns,
+                        })
+            elif os.path.exists(self.shared_data.vuln_summary_file):
                 with open(self.shared_data.vuln_summary_file, 'r') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
