@@ -439,6 +439,22 @@ else
 fi
 
 # ============================================================
+# Step 5c: Bundle NSE vulnerability scripts (vulners.nse)
+# ============================================================
+
+log "INFO" "Bundling nmap NSE scripts..."
+
+NSE_SRC_DIR="${RAGNAR_DIR}/pager_lib/nmap_scripts"
+if [ -d "$NSE_SRC_DIR" ] && [ -n "$(ls -A "$NSE_SRC_DIR" 2>/dev/null)" ]; then
+    mkdir -p "${PAYLOAD_STAGE}/nmap_scripts"
+    cp "${NSE_SRC_DIR}/"*.nse "${PAYLOAD_STAGE}/nmap_scripts/" 2>/dev/null || true
+    NSE_COUNT=$(ls -1 "${PAYLOAD_STAGE}/nmap_scripts/"*.nse 2>/dev/null | wc -l)
+    log "SUCCESS" "Bundled ${NSE_COUNT} NSE script(s) (vulners.nse etc.)"
+else
+    log "WARNING" "No NSE scripts found in pager_lib/nmap_scripts/ - vuln scanning may not work"
+fi
+
+# ============================================================
 # Step 6: Deploy to Pager
 # ============================================================
 
@@ -495,6 +511,44 @@ ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "
 "
 
 log "SUCCESS" "libpagerctl.so installed to /root/lib/"
+
+# ============================================================
+# Step 7b: Install bundled NSE scripts into nmap scripts dir
+# ============================================================
+
+log "INFO" "Installing NSE vulnerability scripts on Pager..."
+
+ssh $SSH_OPTS "${PAGER_USER}@${PAGER_IP}" "
+    # nmap's script dir on OpenWRT (opkg install nmap puts scripts here)
+    NMAP_SCRIPTS_DIR=''
+    for d in /usr/share/nmap/scripts /usr/lib/nmap/scripts /opt/nmap/scripts; do
+        if [ -d \"\$d\" ]; then
+            NMAP_SCRIPTS_DIR=\"\$d\"
+            break
+        fi
+    done
+
+    if [ -z \"\$NMAP_SCRIPTS_DIR\" ]; then
+        # nmap not installed yet - create the dir so scripts are ready when nmap installs
+        mkdir -p /usr/share/nmap/scripts
+        NMAP_SCRIPTS_DIR='/usr/share/nmap/scripts'
+        echo 'Created /usr/share/nmap/scripts (nmap not yet installed)'
+    fi
+
+    if [ -d ${PAGER_PAYLOAD_DIR}/nmap_scripts ]; then
+        cp ${PAGER_PAYLOAD_DIR}/nmap_scripts/*.nse \"\$NMAP_SCRIPTS_DIR/\" 2>/dev/null && \
+            echo \"Installed NSE scripts to \$NMAP_SCRIPTS_DIR\" || \
+            echo 'WARNING: could not copy NSE scripts'
+        # Rebuild the script database if nmap is available
+        if command -v nmap >/dev/null 2>&1; then
+            nmap --script-updatedb 2>&1 | tail -1
+        fi
+    else
+        echo 'No nmap_scripts directory in payload'
+    fi
+"
+
+log "SUCCESS" "NSE scripts installed (vulners.nse ready for vuln scanning)"
 
 # ============================================================
 # Step 8: Install Python3 and dependencies on Pager

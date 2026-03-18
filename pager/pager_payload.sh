@@ -164,6 +164,28 @@ check_dependencies() {
         fi
     fi
 
+    # Ensure vulners.nse is in the nmap scripts directory.
+    # The opkg nmap package does not include third-party NSE scripts;
+    # we bundle vulners.nse in the payload and install it at runtime.
+    NMAP_SCRIPTS_DIR=""
+    for _d in /usr/share/nmap/scripts /usr/lib/nmap/scripts /opt/nmap/scripts; do
+        if [ -d "$_d" ]; then
+            NMAP_SCRIPTS_DIR="$_d"
+            break
+        fi
+    done
+    [ -z "$NMAP_SCRIPTS_DIR" ] && NMAP_SCRIPTS_DIR="/usr/share/nmap/scripts" && mkdir -p "$NMAP_SCRIPTS_DIR"
+
+    if [ ! -f "${NMAP_SCRIPTS_DIR}/vulners.nse" ]; then
+        if [ -f "${PAYLOAD_DIR}/nmap_scripts/vulners.nse" ]; then
+            cp "${PAYLOAD_DIR}/nmap_scripts/vulners.nse" "${NMAP_SCRIPTS_DIR}/"
+            nmap --script-updatedb >/dev/null 2>&1 || true
+            _log green "Installed vulners.nse for vulnerability scanning"
+        else
+            _log "WARNING: vulners.nse not found - vulnerability scanning will be limited"
+        fi
+    fi
+
     _log green "All dependencies found!"
 }
 
