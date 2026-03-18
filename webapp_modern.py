@@ -11774,6 +11774,169 @@ def _network_loot_dirs(network_rel_path, virtual_root):
     return dirs
 
 
+# ---------------------------------------------------------------------------
+# PR 3 — Scanned Networks Tab endpoints
+# ---------------------------------------------------------------------------
+
+@app.route('/api/networks/all')
+def get_all_scanned_networks():
+    """Return summary info for every network Ragnar has ever scanned."""
+    try:
+        networks = _list_all_networks()
+        result = []
+        for net in networks:
+            nd = net['network_dir']
+            stats = _network_dir_stats(nd)
+            result.append({
+                'slug': net['slug'],
+                'ssid': net['ssid'],
+                'last_seen': stats['last_seen'],
+                'file_count': stats['file_count'],
+                'has_loot': stats['has_loot'],
+                'has_creds': stats['has_creds'],
+                'has_vulns': stats['has_vulns'],
+                'has_scans': stats['has_scans'],
+            })
+        return jsonify({'success': True, 'networks': result, 'total': len(result)})
+    except Exception as exc:
+        logger.error(f"Error listing all networks: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+def _network_dir_stats(network_dir):
+    """Compute lightweight stats for a single network directory."""
+    import time as _time
+
+    category_paths = {
+        'has_loot':  os.path.join(network_dir, 'loot', 'data_stolen'),
+        'has_creds': os.path.join(network_dir, 'loot', 'credentials'),
+        'has_vulns': os.path.join(network_dir, 'output', 'vulnerabilities'),
+        'has_scans': os.path.join(network_dir, 'output', 'scan_results'),
+    }
+
+    flags = {}
+    file_count = 0
+    latest_mtime = 0.0
+
+    for flag, path in category_paths.items():
+        if not os.path.isdir(path):
+            flags[flag] = False
+            continue
+        entries = []
+        for root, _, files in os.walk(path):
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    mtime = os.path.getmtime(fp)
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+                    file_count += 1
+                    entries.append(fp)
+                except OSError:
+                    pass
+        flags[flag] = bool(entries)
+
+    if latest_mtime:
+        import datetime as _dt
+        last_seen = _dt.datetime.fromtimestamp(latest_mtime).strftime('%Y-%m-%d %H:%M')
+    else:
+        last_seen = ''
+
+    return {**flags, 'file_count': file_count, 'last_seen': last_seen}
+
+
+@app.route('/api/networks/<slug>/files')
+def get_network_files(slug):
+    """Return a flat list of files stored under a specific network's directory."""
+    try:
+        # Validate slug
+        if not slug or not all(c.isalnum() or c == '_' for c in slug):
+            return jsonify({'success': False, 'error': 'Invalid network slug'}), 400
+
+        networks_dir = _get_networks_dir()
+        network_dir = os.path.join(networks_dir, slug)
+
+        if not os.path.isdir(network_dir):
+            return jsonify({'success': False, 'error': 'Network not found'}), 404
+
+        # Read human-readable SSID
+        ssid = slug
+        ssid_file = os.path.join(network_dir, 'ssid.txt')
+        if os.path.exists(ssid_file):
+            try:
+                with open(ssid_file, 'r', encoding='utf-8') as _f:
+                    ssid = _f.read().strip() or slug
+            except IOError:
+                pass
+
+        # Categories to expose and their virtual path prefixes
+        categories = {
+            'data_stolen':    os.path.join(network_dir, 'loot', 'data_stolen'),
+            'credentials':    os.path.join(network_dir, 'loot', 'credentials'),
+            'vulnerabilities': os.path.join(network_dir, 'output', 'vulnerabilities'),
+            'scan_results':   os.path.join(network_dir, 'output', 'scan_results'),
+        }
+
+        files = []
+        for category, cat_dir in categories.items():
+            if not os.path.isdir(cat_dir):
+                continue
+            for root, _, filenames in os.walk(cat_dir):
+                for fname in sorted(filenames):
+                    fp = os.path.join(root, fname)
+                    try:
+                        stat = os.stat(fp)
+                        # Build a virtual path reachable via /api/files/download
+                        rel = os.path.relpath(fp, os.path.join(networks_dir))
+                        # Map back to the virtual file-browser namespace
+                        virtual_map = {
+                            'data_stolen':    '/data_stolen',
+                            'credentials':    '/crackedpwd',
+                            'vulnerabilities': '/vulnerabilities',
+                            'scan_results':   '/scan_results',
+                        }
+                        vroot = virtual_map[category]
+                        inner = os.path.relpath(fp, cat_dir).replace('\\', '/')
+                        virtual_path = f"{vroot}/{slug}/{inner}"
+
+                        files.append({
+                            'filename': fname,
+                            'category': category,
+                            'size': _format_bytes_simple(stat.st_size),
+                            'modified': _format_timestamp_simple(stat.st_mtime),
+                            'virtual_path': virtual_path,
+                        })
+                    except OSError:
+                        pass
+
+        return jsonify({
+            'success': True,
+            'slug': slug,
+            'ssid': ssid,
+            'files': files,
+            'total': len(files),
+        })
+    except Exception as exc:
+        logger.error(f"Error listing files for network '{slug}': {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+def _format_bytes_simple(size):
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if size < 1024:
+            return f"{size:.1f} {unit}" if unit != 'B' else f"{size} B"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _format_timestamp_simple(ts):
+    import datetime as _dt
+    try:
+        return _dt.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        return ''
+
+
 @app.route('/api/files/list')
 def list_files_api():
     """List files in a directory for file management"""
