@@ -489,6 +489,7 @@ function epdTypeToSizeKey(epd_type) {
     if (epd_type.startsWith('epd2in7')) return '2in7';
     if (epd_type.startsWith('epd2in9')) return '2in9';
     if (epd_type.startsWith('epd3in7')) return '3in7';
+    if (epd_type.startsWith('epd4in26')) return '4in26';
     if (epd_type === 'gc9a01') return '1in28_tft';
     if (epd_type === 'ssd1306') return '0in96_oled';
     return epd_type; // fallback: return as-is
@@ -501,6 +502,7 @@ const displaySelectOptions = {
         { value: '2in7', label: '2.7" e-Paper (176x264)' },
         { value: '2in9', label: '2.9" e-Paper (128x296)' },
         { value: '3in7', label: '3.7" e-Paper (280x480)' },
+        { value: '4in26', label: '4.26" e-Paper (800x480)' },
         { value: '1in28_tft', label: '1.28" GC9A01 Round TFT (240x240)' },
         { value: '0in96_oled', label: '0.96" SSD1306 OLED (128x64)' },
         { value: 'max7219_8panel', label: 'MAX7219 8-panel LED Matrix (64×8)' },

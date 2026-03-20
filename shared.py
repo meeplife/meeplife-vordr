@@ -62,6 +62,7 @@ SIZE_KEY_TO_DEFAULT_DRIVER = {
     "2in7":     "epd2in7_V2",
     "2in9":     "epd2in9_V2",
     "3in7":     "epd3in7",
+    "4in26":    "epd4in26",
     "1in28_tft": "gc9a01",
     "0in96_oled": "ssd1306",
 }
@@ -92,6 +93,7 @@ DISPLAY_PROFILES = {
     "epd2in7_V2":  {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in9_V2":  {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd3in7":     {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    "epd4in26":    {"ref_width": 800, "ref_height": 480, "default_flip": False},
     "epd2in13_V2": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in13_V3": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": True},
     "epd2in13_V4": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
