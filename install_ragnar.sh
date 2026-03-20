@@ -1580,7 +1580,7 @@ main() {
             log "INFO" "Attempting to auto-detect E-Paper display"
             
             EPD_VERSION=""
-            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7_V2" "epd2in7" "epd2in13" "epd2in9_V2" "epd3in7")
+            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7_V2" "epd2in7" "epd2in13" "epd2in9_V2" "epd3in7" "epd4in26")
             
             for version in "${EPD_VERSIONS[@]}"; do
                 echo -e "${BLUE}Testing ${version}...${NC}"
@@ -1659,21 +1659,22 @@ except:
             echo "6.  epd2in7      (2.7\"  V1 176x264)"
             echo "7.  epd2in9_V2   (2.9\"  128x296)"
             echo "8.  epd3in7      (3.7\"  280x480)"
+            echo "9.  epd4in26     (4.26\" 800x480)"
             echo ""
             echo -e "${CYAN}  TFT LCD displays:${NC}"
-            echo "9.  GC9A01       (1.28\" Round 240x240)"
+            echo "10. GC9A01       (1.28\" Round 240x240)"
             echo ""
             echo -e "${CYAN}  OLED displays:${NC}"
-            echo "10. SSD1306      (0.96\" OLED 128x64)"
+            echo "11. SSD1306      (0.96\" OLED 128x64)"
             echo ""
             echo -e "${CYAN}  LED Matrix displays:${NC}"
-            echo "11. MAX7219  (8 panels 64×8 LED matrix)"
-            echo "12. MAX7219  (4 panels 32×8 LED matrix)"
+            echo "12. MAX7219  (8 panels 64×8 LED matrix)"
+            echo "13. MAX7219  (4 panels 32×8 LED matrix)"
             echo ""
-            echo "13. No display (headless install)"
+            echo "14. No display (headless install)"
 
             while true; do
-                read -p "Enter your choice (1-13): " epd_choice
+                read -p "Enter your choice (1-14): " epd_choice
                 case $epd_choice in
                     1) EPD_VERSION="epd2in13"; break;;
                     2) EPD_VERSION="epd2in13_V2"; break;;
@@ -1683,16 +1684,17 @@ except:
                     6) EPD_VERSION="epd2in7"; break;;
                     7) EPD_VERSION="epd2in9_V2"; break;;
                     8) EPD_VERSION="epd3in7"; break;;
-                    9) EPD_VERSION="gc9a01"; break;;
-                    10) EPD_VERSION="ssd1306"; break;;
-                    11) EPD_VERSION="max7219_8panel"; break;;
-                    12) EPD_VERSION="max7219_4panel"; break;;
-                    13)
+                    9) EPD_VERSION="epd4in26"; break;;
+                    10) EPD_VERSION="gc9a01"; break;;
+                    11) EPD_VERSION="ssd1306"; break;;
+                    12) EPD_VERSION="max7219_8panel"; break;;
+                    13) EPD_VERSION="max7219_4panel"; break;;
+                    14)
                         select_headless_variant
                         EPD_VERSION=""
                         break
                         ;;
-                    *) echo -e "${RED}Invalid choice. Please select 1-13.${NC}";;
+                    *) echo -e "${RED}Invalid choice. Please select 1-14.${NC}";;
                 esac
             done
 
