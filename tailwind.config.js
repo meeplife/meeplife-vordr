@@ -19,7 +19,7 @@ module.exports = {
         }
       },
       screens: {
-        'nav': '2600px',
+        'nav': '1000px',
       }
     }
   },
