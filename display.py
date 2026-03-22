@@ -21,7 +21,7 @@ import logging
 import random
 import sys
 import csv
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from init_shared import shared_data  
 from comment import Commentaireia
 from logger import Logger
@@ -58,7 +58,7 @@ class Display:
 
         try:
             self.epd_helper = self.shared_data.epd_helper
-            # MAX7219 and other non-EPD displays set epd_helper to None;
+            # MAX7219, LCD1602 and other non-EPD displays set epd_helper to None;
             # skip EPD-specific init — their _run_* method handles setup.
             if self.epd_helper is not None:
                 self.epd_helper.init_partial_update()
@@ -1525,6 +1525,224 @@ class Display:
             time.sleep(TICK_SLEEP)
 
     # ------------------------------------------------------------------
+    # LCD1602 16x2 character LCD display loop
+    # ------------------------------------------------------------------
+
+    def _run_lcd1602(self):
+        """LCD1602 16×2 display loop with two independent rotation timers.
+
+        Top row (15 s each):
+          Slot 0 — WiFi SSID          e.g. "Tango Down 5G  "
+          Slot 1 — IP address         e.g. "192.168.1.100  "
+          Slot 2 — Ragnar status      e.g. "NetworkScanner "
+
+        Bottom row (5 s each, 3 slots):
+          Slot 0 — "Targets: 42     "
+          Slot 1 — "Vuln: 4         "
+          Slot 2 — "Credentials: 0  "
+
+        Handles I2C errors gracefully — forces full re-init on next tick.
+        """
+        import subprocess
+        from resources.waveshare_epd import lcd1602 as _lcd1602_mod
+
+        TOP_INTERVAL    = 15.0  # seconds per top-row slot
+        TOP_SLOTS       = 3
+        BOTTOM_INTERVAL = 5.0   # seconds per bottom-row slot
+        BOTTOM_SLOTS    = 3
+        TICK_SLEEP      = 0.5   # polling interval (seconds)
+
+        def _get_ssid():
+            try:
+                res = subprocess.run(
+                    ["iwgetid", "-r"], capture_output=True, text=True, timeout=2
+                )
+                ssid = res.stdout.strip()
+                if ssid:
+                    return ssid
+            except Exception:
+                pass
+            if getattr(self.shared_data, "ap_enabled", False):
+                return "AP MODE"
+            return "No Network"
+
+        def _get_ip():
+            try:
+                res = subprocess.run(
+                    ["hostname", "-I"], capture_output=True, text=True, timeout=2
+                )
+                ip = res.stdout.strip().split()[0]
+                if ip:
+                    return ip
+            except Exception:
+                pass
+            return "No IP"
+
+        def _get_status():
+            status = getattr(self.shared_data, "ragnarstatustext", None) or "IDLE"
+            return str(status)
+
+        def _render_lcd_preview(row0: str, row1: str):
+            """Write a simulated LCD1602 image to screen.png for the web preview tab."""
+            try:
+                # Colours — classic green-on-dark LCD backlit look
+                BEZEL_COLOR  = (20, 28, 20)
+                BG_COLOR     = (10, 22, 10)
+                CHAR_COLOR   = (80, 255, 100)
+                CURSOR_COLOR = (40, 120, 50)   # darker fill for empty char cells
+
+                BEZEL       = 14   # px border around the LCD panel
+                PAD_X       = 18   # horizontal padding inside the panel
+                PAD_Y       = 12   # vertical padding inside the panel
+                ROW_GAP     = 10   # gap between the two character rows
+                FONT_SIZE   = 28
+
+                # Try common monospace fonts available on the Pi and Windows
+                font = None
+                for fp in (
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+                    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+                    "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
+                    "C:/Windows/Fonts/cour.ttf",
+                ):
+                    try:
+                        font = ImageFont.truetype(fp, size=FONT_SIZE)
+                        break
+                    except Exception:
+                        pass
+                if font is None:
+                    font = ImageFont.load_default()
+
+                # Measure a single character to size the canvas
+                probe = Image.new("RGB", (1, 1))
+                bb = ImageDraw.Draw(probe).textbbox((0, 0), "W", font=font)
+                char_w = bb[2] - bb[0]
+                char_h = bb[3] - bb[1]
+
+                panel_w = PAD_X * 2 + char_w * 16
+                panel_h = PAD_Y * 2 + char_h * 2 + ROW_GAP
+                img_w   = panel_w + BEZEL * 2
+                img_h   = panel_h + BEZEL * 2
+
+                img  = Image.new("RGB", (img_w, img_h), BEZEL_COLOR)
+                draw = ImageDraw.Draw(img)
+
+                # LCD panel background
+                draw.rectangle(
+                    [BEZEL, BEZEL, BEZEL + panel_w - 1, BEZEL + panel_h - 1],
+                    fill=BG_COLOR,
+                )
+
+                # Draw each row of 16 characters
+                for row_idx, text in enumerate((row0, row1)):
+                    text = (text or "").ljust(16)[:16]
+                    x = BEZEL + PAD_X
+                    y = BEZEL + PAD_Y + row_idx * (char_h + ROW_GAP)
+                    draw.text((x, y), text, font=font, fill=CHAR_COLOR)
+
+                webdir = getattr(self.shared_data, "webdir", None)
+                if webdir:
+                    img.save(os.path.join(webdir, "screen.png"))
+            except Exception as exc:
+                logger.error(f"LCD1602 preview render error: {exc}")
+
+        # ── Initialise display ──────────────────────────────────────────
+        _i2c_raw = self.config.get("lcd1602_i2c_address", "0x27")
+        i2c_addr = int(_i2c_raw, 16) if isinstance(_i2c_raw, str) else int(_i2c_raw)
+        i2c_bus  = int(self.config.get("lcd1602_i2c_bus", 1))
+
+        epd = _lcd1602_mod.EPD(i2c_address=i2c_addr, i2c_bus=i2c_bus)
+        try:
+            epd.init()
+        except Exception as exc:
+            logger.error(f"LCD1602 init failed: {exc}")
+
+        _last_line0    = None
+        _last_line1    = None
+        _top_slot      = 0
+        _bottom_slot   = 0
+        _top_start     = time.monotonic() - TOP_INTERVAL     # trigger write on first tick
+        _bottom_start  = time.monotonic() - BOTTOM_INTERVAL  # trigger write on first tick
+
+        # ── Main loop ───────────────────────────────────────────────────
+        _hw_line0 = None   # tracks what is currently written to hardware
+        _hw_line1 = None
+        while not self.shared_data.display_should_exit:
+            # — compute current content (slot timers + data) —
+            try:
+                sd  = self.shared_data
+                now = time.monotonic()
+
+                # — advance top slot —
+                if now - _top_start >= TOP_INTERVAL:
+                    _top_slot  = (_top_slot + 1) % TOP_SLOTS
+                    _top_start = now
+
+                # — advance bottom slot —
+                if now - _bottom_start >= BOTTOM_INTERVAL:
+                    _bottom_slot  = (_bottom_slot + 1) % BOTTOM_SLOTS
+                    _bottom_start = now
+
+                # — gather data —
+                targets = getattr(sd, "total_targetnbr", 0) or 0
+                vulns   = getattr(sd, "vulnnbr",          0) or 0
+                creds   = getattr(sd, "crednbr",          0) or 0
+
+                # — build top line —
+                if _top_slot == 0:
+                    line0 = _get_ssid()
+                elif _top_slot == 1:
+                    line0 = _get_ip()
+                else:
+                    line0 = _get_status()
+                line0 = line0.ljust(16)[:16]
+
+                # — build bottom line —
+                if _bottom_slot == 0:
+                    line1 = f"Targets: {targets}"
+                elif _bottom_slot == 1:
+                    line1 = f"Vuln: {vulns}"
+                else:
+                    line1 = f"Credentials: {creds}"
+                line1 = line1.ljust(16)[:16]
+
+                # — update web preview whenever content changes —
+                if line0 != _last_line0 or line1 != _last_line1:
+                    _render_lcd_preview(line0, line1)
+                    _last_line0 = line0
+                    _last_line1 = line1
+
+            except Exception as exc:
+                logger.error(f"LCD1602 data error: {exc}")
+
+            # — write to hardware (isolated so I2C errors don't block preview) —
+            try:
+                if not epd._initialized:
+                    epd.init()
+                    _hw_line0 = None   # force full rewrite after reinit
+                    _hw_line1 = None
+                if _last_line0 is not None and _last_line0 != _hw_line0:
+                    epd.write_line(0, _last_line0)
+                    _hw_line0 = _last_line0
+                if _last_line1 is not None and _last_line1 != _hw_line1:
+                    epd.write_line(1, _last_line1)
+                    _hw_line1 = _last_line1
+            except Exception as exc:
+                logger.error(f"LCD1602 hardware write error: {exc}")
+                epd._initialized = False
+                _hw_line0 = None
+                _hw_line1 = None
+
+            time.sleep(TICK_SLEEP)
+
+        # ── Cleanup on exit ─────────────────────────────────────────────
+        try:
+            epd.Clear()
+            epd.sleep()
+        except Exception as exc:
+            logger.error(f"LCD1602 shutdown error: {exc}")
+
+    # ------------------------------------------------------------------
     # SSD1306 0.96" 128x64 monochrome OLED display loop
     # ------------------------------------------------------------------
 
@@ -1873,6 +2091,10 @@ class Display:
 
         if self.config.get("epd_type") == "ssd1306":
             self._run_ssd1306()
+            return
+
+        if self.config.get("epd_type") == "lcd1602":
+            self._run_lcd1602()
             return
 
         if self.config.get("epd_type") in ("max7219_4panel", "max7219_8panel"):

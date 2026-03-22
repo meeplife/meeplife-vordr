@@ -313,6 +313,10 @@ const configMetadata = {
         label: "GC9A01 Mascot Tint Color",
         description: "Tint color applied to the animated mascot on the GC9A01 1.28\" round TFT display. Only visible when GC9A01 is selected."
     },
+    lcd1602_i2c_address: {
+        label: "LCD1602 I2C Address",
+        description: "I2C address of the PCF8574 backpack on the LCD1602 16×2 character display. Common values: 0x27 (most common) or 0x3F. Auto-detected if unreachable."
+    },
     display_brightness: {
         label: "Display Brightness",
         description: "Brightness level for non-e-ink displays (SSD1306, GC9A01, MAX7219). Range 0–15. Default: 8."
@@ -496,6 +500,7 @@ function epdTypeToSizeKey(epd_type) {
     if (epd_type.startsWith('epd4in26')) return '4in26';
     if (epd_type === 'gc9a01') return '1in28_tft';
     if (epd_type === 'ssd1306') return '0in96_oled';
+    if (epd_type === 'lcd1602') return 'lcd1602';
     return epd_type; // fallback: return as-is
 }
 
@@ -509,6 +514,7 @@ const displaySelectOptions = {
         { value: '4in26', label: '4.26" e-Paper (800x480)' },
         { value: '1in28_tft', label: '1.28" GC9A01 Round TFT (240x240)' },
         { value: '0in96_oled', label: '0.96" SSD1306 OLED (128x64)' },
+        { value: 'lcd1602', label: '16×2 LCD1602 Character LCD (I2C)' },
         { value: 'max7219_8panel', label: 'MAX7219 8-panel LED Matrix (64×8)' },
         { value: 'max7219_4panel', label: 'MAX7219 4-panel LED Matrix (32×8)' }
     ],
@@ -9917,15 +9923,16 @@ function displayConfigForm(config) {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Network': ['network_max_failed_pings'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
-        'Display': ['epd_type', 'screen_reversed', 'spi_clock_mhz', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']
+        'Display': ['epd_type', 'screen_reversed', 'spi_clock_mhz', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']
     };
     
     const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
-    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'spi_clock_mhz', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']);
+    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address', 'spi_clock_mhz', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']);
     const fallbackValues = {
         network_max_failed_pings: 15,
         gc9a01_mascot_color: '#96C8FF',
         ssd1306_i2c_address: '0x3C',
+        lcd1602_i2c_address: '0x27',
         spi_clock_mhz: 2,
         max7219_spi_port: 0,
         max7219_spi_device: 0,
@@ -10027,6 +10034,20 @@ function displayConfigForm(config) {
                             <p class="text-xs text-gray-500">Most modules use 0x3C. Use 0x3D if display doesn't initialize.</p>
                         </div>
                     `;
+                } else if (key === 'lcd1602_i2c_address') {
+                    const currentVal = (value && typeof value === 'string') ? value : '0x27';
+                    html += `
+                        <div class="space-y-2" id="cfg-lcd1602-addr-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="text" name="${key}" id="cfg-lcd1602-addr-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${currentVal}" placeholder="0x27 or 0x3F">
+                            <p class="text-xs text-gray-500">Most PCF8574 backpacks use 0x27. Address is auto-detected if unreachable.</p>
+                        </div>
+                    `;
                 } else if (key === 'max7219_spi_port') {
                     const spiPort = (value !== undefined && value !== null) ? value : 0;
                     html += `
@@ -10039,20 +10060,6 @@ function displayConfigForm(config) {
                                    class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
                                    value="${spiPort}" min="0" max="1">
                             <p class="text-xs text-gray-500">SPI bus (0 = SPI0, 1 = SPI1). Default: 0.</p>
-                        </div>
-                    `;
-                } else if (key === 'max7219_spi_device') {
-                    const spiDev = (value !== undefined && value !== null) ? value : 0;
-                    html += `
-                        <div class="space-y-2" id="cfg-max7219-spi-device-row">
-                            <label class="flex items-center gap-2 text-sm text-gray-400">
-                                ${label}
-                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
-                            </label>
-                            <input type="number" name="${key}" id="cfg-max7219-spi-device-input"
-                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
-                                   value="${spiDev}" min="0" max="1">
-                            <p class="text-xs text-gray-500">CE pin (0 = CE0/Pin24, 1 = CE1/Pin26). Default: 0.</p>
                         </div>
                     `;
                 } else if (key === 'max7219_block_orientation') {
@@ -10095,6 +10102,7 @@ function displayConfigForm(config) {
                                    class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
                                    value="${clockMhz}" min="0.5" max="4" step="0.5">
                             <p class="text-xs text-gray-500">2 MHz recommended with PiSugar. Drop to 1 MHz if pixels are still corrupted. Takes effect after service restart.</p>
+>>>>>>> upstream/main
                         </div>
                     `;
                 } else {
@@ -10133,6 +10141,7 @@ function displayConfigForm(config) {
     const epdSelect = document.querySelector('select[name="epd_type"]');
     const colorRow = document.getElementById('cfg-gc9a01-color-row');
     const addrRow = document.getElementById('cfg-ssd1306-addr-row');
+    const lcdAddrRow = document.getElementById('cfg-lcd1602-addr-row');
     const max7219SpiPortRow = document.getElementById('cfg-max7219-spi-port-row');
     const max7219SpiDevRow = document.getElementById('cfg-max7219-spi-device-row');
     const max7219BlockRow = document.getElementById('cfg-max7219-block-row');
@@ -10143,9 +10152,11 @@ function displayConfigForm(config) {
         const isMax7219 = val === 'max7219_8panel' || val === 'max7219_4panel';
         const isSsd1306 = val === '0in96_oled';
         const isGc9a01 = val === '1in28_tft';
-        const isEpaper = !isMax7219 && !isSsd1306 && !isGc9a01;
+        const isLcd1602 = val === 'lcd1602';
+        const isEpaper = !isMax7219 && !isSsd1306 && !isGc9a01 && !isLcd1602;
         if (colorRow) colorRow.style.display = isGc9a01 ? '' : 'none';
         if (addrRow) addrRow.style.display = isSsd1306 ? '' : 'none';
+        if (lcdAddrRow) lcdAddrRow.style.display = isLcd1602 ? '' : 'none';
         if (max7219SpiPortRow) max7219SpiPortRow.style.display = isMax7219 ? '' : 'none';
         if (max7219SpiDevRow) max7219SpiDevRow.style.display = isMax7219 ? '' : 'none';
         if (max7219BlockRow) max7219BlockRow.style.display = isMax7219 ? '' : 'none';

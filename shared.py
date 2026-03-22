@@ -65,6 +65,7 @@ SIZE_KEY_TO_DEFAULT_DRIVER = {
     "4in26":    "epd4in26",
     "1in28_tft": "gc9a01",
     "0in96_oled": "ssd1306",
+    "1602_lcd": "lcd1602",
 }
 
 def resolve_epd_type(size_key, current_epd_type=None):
@@ -104,7 +105,10 @@ DISPLAY_PROFILES = {
     # GC9A01 1.28" 240x240 round colour TFT LCD
     "gc9a01":      {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_WIDTH, "default_flip": False},
     # SSD1306 0.96" 128x64 monochrome OLED
-    "ssd1306":     {"ref_width": 128, "ref_height": 64, "default_flip": False},
+    "ssd1306":     {"ref_width": 128, "ref_height": 64,  "default_flip": False},
+    # LCD1602 16x2 character LCD (I2C via PCF8574 backpack)
+    "lcd1602":     {"ref_width": 16,  "ref_height": 2,   "default_flip": False},
+    # MAX7219 LED matrix displays
     "max7219_4panel": {"ref_width": 32,  "ref_height": 8, "default_flip": False},
     "max7219_8panel": {"ref_width": 64,  "ref_height": 8, "default_flip": False},
 }
@@ -561,6 +565,8 @@ class SharedData:
             "screen_reversed": default_profile.get("default_flip", False),
             "gc9a01_mascot_color": "#96C8FF",
             "ssd1306_i2c_address": "0x3C",
+            "lcd1602_i2c_address": "0x27",
+            "lcd1602_i2c_bus": 1,
             "display_brightness": 8,
             "spi_clock_mhz": 2,
             "max7219_spi_port":         0,
@@ -841,16 +847,22 @@ class SharedData:
             self.web_screen_reversed = self.screen_reversed
             return
 
-        # MAX7219 LED matrix is managed entirely by display.py — skip EPD init
-        _epd_type_check = self.config.get('epd_type', '')
-        if _epd_type_check in ("max7219_4panel", "max7219_8panel"):
-            logger.info(f"MAX7219 display configured ({_epd_type_check}) — skipping EPD init")
+        # Non-EPD displays (character LCDs and LED matrices) have no PIL buffer
+        # interface — skip EPDHelper init entirely for these types.
+        _NON_EPD_DISPLAYS = {"lcd1602", "max7219_4panel", "max7219_8panel"}
+        epd_type_cfg = self.config.get("epd_type", DEFAULT_EPD_TYPE)
+        if epd_type_cfg in _NON_EPD_DISPLAYS:
+            profile = DISPLAY_PROFILES.get(epd_type_cfg, {})
+            self.width  = profile.get("ref_width",  16)
+            self.height = profile.get("ref_height",  2)
             self.epd_helper = None
-            profile = DISPLAY_PROFILES.get(_epd_type_check, {"ref_width": 64, "ref_height": 8, "default_flip": False})
-            self.width = profile['ref_width']
-            self.height = profile['ref_height']
-            self.screen_reversed = bool(self.config.get('screen_reversed', False))
+            self.screen_reversed     = bool(self.config.get("screen_reversed", False))
             self.web_screen_reversed = self.screen_reversed
+            self.apply_display_profile(epd_type_cfg)
+            logger.info(
+                f"Non-EPD display '{epd_type_cfg}' configured: {self.width}x{self.height}"
+                " — skipping EPD buffer init"
+            )
             return
 
         try:
