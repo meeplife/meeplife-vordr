@@ -249,70 +249,70 @@
                 </div>
                 
                 <!-- Navigation Links -->
-                <div id="desktop-nav" class="hidden flex-wrap gap-1">
-                    <button onclick="showTab('dashboard')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="dashboard">
+                <div id="desktop-nav" class="hidden space-x-1">
+                    <button onclick="showTab('dashboard')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="dashboard">
                         Dashboard
                     </button>
-                    <button onclick="showTab('network')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="network">
+                    <button onclick="showTab('network')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="network">
                         Network
                     </button>
-                    <button onclick="showTab('networks')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="networks">
+                    <button onclick="showTab('networks')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="networks">
                         AP Archive
                     </button>
-                    <button onclick="showTab('network-map')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="network-map">
+                    <button onclick="showTab('network-map')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="network-map">
                         Map
                     </button>
-                    <button onclick="showTab('discovered')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="discovered">
+                    <button onclick="showTab('discovered')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="discovered">
                         Discovered
                     </button>
-                    <button onclick="showTab('credentials')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="credentials">
+                    <button onclick="showTab('credentials')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="credentials">
                         Credentials
                     </button>
                     <button id="pentest-nav-btn" onclick="showTab('pentest')"
-                            class="nav-btn px-2 py-1.5 rounded-lg transition-colors text-sm whitespace-nowrap pentest-nav-btn hidden"
+                            class="nav-btn px-4 py-2 rounded-lg transition-colors pentest-nav-btn hidden"
                             data-tab="pentest">
-                        <span class="flex items-center space-x-1">
-                            <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <span class="flex items-center space-x-2">
+                            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M5.455 19h13.09a1 1 0 00.894-1.447L12.894 5.553a1 1 0 00-1.788 0L4.561 17.553A1 1 0 005.455 19z"></path>
                             </svg>
-                            <span class="uppercase tracking-wide">Pentest</span>
+                            <span class="uppercase tracking-wide text-sm">Pentest</span>
                         </span>
                     </button>
-                    <button onclick="showTab('threat-intel')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="threat-intel">
+                    <button onclick="showTab('threat-intel')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="threat-intel">
                         Threat Intel
                     </button>
-                    <button onclick="showTab('traffic')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap server-mode-feature hidden" data-tab="traffic">
+                    <button onclick="showTab('traffic')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors server-mode-feature hidden" data-tab="traffic">
                         <span class="flex items-center space-x-1">
-                            <svg class="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                             </svg>
                             <span>Traffic</span>
                         </span>
                     </button>
-                    <button onclick="showTab('adv-vuln')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap server-mode-feature hidden" data-tab="adv-vuln">
+                    <button onclick="showTab('adv-vuln')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors server-mode-feature hidden" data-tab="adv-vuln">
                         <span class="flex items-center space-x-1">
-                            <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
                             </svg>
                             <span>Adv Scan</span>
                         </span>
                     </button>
-                    <button onclick="showTab('epaper')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap requires-display" data-tab="epaper">
+                    <button onclick="showTab('epaper')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors requires-display" data-tab="epaper">
                         Display
                     </button>
-                    <button onclick="showTab('files')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="files">
+                    <button onclick="showTab('files')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="files">
                         Files
                     </button>
-                    <button onclick="showTab('system')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="system">
+                    <button onclick="showTab('system')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="system">
                         System
                     </button>
-                    <button onclick="showTab('connect')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="connect">
+                    <button onclick="showTab('connect')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="connect">
                         Connect
                     </button>
-                    <button onclick="showTab('config')" class="nav-btn px-2 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-sm whitespace-nowrap" data-tab="config">
+                    <button onclick="showTab('config')" class="nav-btn px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors" data-tab="config">
                         Config
                     </button>
-                    <button id="logout-btn" onclick="handleLogout()" class="hidden nav-btn px-2 py-1.5 rounded-lg hover:bg-red-700 bg-red-600/50 transition-colors text-sm whitespace-nowrap text-red-200">
+                    <button id="logout-btn" onclick="handleLogout()" class="hidden nav-btn px-4 py-2 rounded-lg hover:bg-red-700 bg-red-600/50 transition-colors text-red-200">
                         Logout
                     </button>
                 </div>
