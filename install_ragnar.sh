@@ -827,6 +827,10 @@ print('SUCCESS: Set shared_config.json epd_type to $EPD_VERSION')
             || log "ERROR" "EPD driver $EPD_VERSION failed to import"
     fi
 
+    if [[ "$EPD_VERSION" == max7219* ]]; then
+        sudo pip3 install --break-system-packages luma.led_matrix luma.core 2>/dev/null || pip3 install --break-system-packages luma.led_matrix luma.core 2>/dev/null || true
+    fi
+
     check_success "Installed Python requirements"
 
     # Configure Ragnar entrypoint according to the selected mode
@@ -1370,7 +1374,7 @@ BANNER
         echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Raspberry Pi with TFT LCD display              ${NC}"
         echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} Server install with display                    ${NC}"
         echo -e "   ${CYAN}*${YELLOW} 4)${CYAN} Server install (headless, no display)           ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 5)${CYAN} WiFi Pineapple Pager ${RED}(WIP)                    ${NC}"
+        echo -e "   ${CYAN}*${YELLOW} 5)${CYAN} WiFi Pineapple Pager ${RED}(beta)                    ${NC}"
     else
         echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Server install with display                    ${NC}"
         echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install (headless, no display)           ${NC}"
@@ -1589,7 +1593,7 @@ main() {
             log "INFO" "Attempting to auto-detect E-Paper display"
             
             EPD_VERSION=""
-            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7_V2" "epd2in7" "epd2in13" "epd2in9_V2" "epd3in7")
+            EPD_VERSIONS=("epd2in13_V4" "epd2in13_V3" "epd2in13_V2" "epd2in7_V2" "epd2in7" "epd2in13" "epd2in9_V2" "epd3in7" "epd4in26")
             
             for version in "${EPD_VERSIONS[@]}"; do
                 echo -e "${BLUE}Testing ${version}...${NC}"
@@ -1668,20 +1672,25 @@ except:
             echo "6.  epd2in7      (2.7\"  V1 176x264)"
             echo "7.  epd2in9_V2   (2.9\"  128x296)"
             echo "8.  epd3in7      (3.7\"  280x480)"
+            echo "9.  epd4in26     (4.26\" 800x480)"
             echo ""
             echo -e "${CYAN}  TFT LCD displays:${NC}"
-            echo "9.  GC9A01       (1.28\" Round 240x240)"
+            echo "10. GC9A01       (1.28\" Round 240x240)"
             echo ""
             echo -e "${CYAN}  OLED displays:${NC}"
-            echo "10. SSD1306      (0.96\" OLED 128x64)"
+            echo "11. SSD1306      (0.96\" OLED 128x64)"
             echo ""
             echo -e "${CYAN}  Character LCD:${NC}"
-            echo "11. LCD1602      (16x2 I2C Character LCD)"
+            echo "12. LCD1602      (16x2 I2C Character LCD)"
             echo ""
-            echo "12. No display (headless install)"
+            echo -e "${CYAN}  LED Matrix displays:${NC}"
+            echo "13. MAX7219  (8 panels 64×8 LED matrix)"
+            echo "14. MAX7219  (4 panels 32×8 LED matrix)"
+            echo ""
+            echo "15. No display (headless install)"
 
             while true; do
-                read -p "Enter your choice (1-12): " epd_choice
+                read -p "Enter your choice (1-15): " epd_choice
                 case $epd_choice in
                     1) EPD_VERSION="epd2in13"; break;;
                     2) EPD_VERSION="epd2in13_V2"; break;;
@@ -1691,15 +1700,18 @@ except:
                     6) EPD_VERSION="epd2in7"; break;;
                     7) EPD_VERSION="epd2in9_V2"; break;;
                     8) EPD_VERSION="epd3in7"; break;;
-                    9) EPD_VERSION="gc9a01"; break;;
-                    10) EPD_VERSION="ssd1306"; break;;
-                    11) EPD_VERSION="lcd1602"; break;;
-                    12)
+                    9) EPD_VERSION="epd4in26"; break;;
+                    10) EPD_VERSION="gc9a01"; break;;
+                    11) EPD_VERSION="ssd1306"; break;;
+                    12) EPD_VERSION="lcd1602"; break;;
+                    13) EPD_VERSION="max7219_8panel"; break;;
+                    14) EPD_VERSION="max7219_4panel"; break;;
+                    15)
                         select_headless_variant
                         EPD_VERSION=""
                         break
                         ;;
-                    *) echo -e "${RED}Invalid choice. Please select 1-12.${NC}";;
+                    *) echo -e "${RED}Invalid choice. Please select 1-15.${NC}";;
                 esac
             done
 

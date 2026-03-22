@@ -287,6 +287,17 @@ if __name__ == "__main__":
         # wipe_epd stays as ExecStartPre (separate process) to avoid GPIO conflicts
         # with the Display's EPDHelper instance that shares the same pins.
 
+        # Start the web server first so it becomes available even if the
+        # EPD display initialisation is slow (e-paper displays can take
+        # 10-30 seconds to initialise, especially larger panels like the 4.26").
+        if shared_data.config["websrv"]:
+            logger.info("Starting the web server...")
+            from webapp_modern import run_server
+            web_thread = threading.Thread(target=run_server, daemon=True)
+            web_thread.start()
+        else:
+            web_thread = None
+
         logger.info("Starting display thread...")
         shared_data.display_should_exit = False  # Initialize display should_exit
         display_thread = Ragnar.start_display()
@@ -294,21 +305,13 @@ if __name__ == "__main__":
         logger.info("Starting Ragnar thread...")
         ragnar = Ragnar(shared_data)
         shared_data.ragnar_instance = ragnar  # Assigner l'instance de Ragnar à shared_data
-        
+
         # Link display instance to ragnar instance
         if hasattr(shared_data, 'display_instance'):
             ragnar.display = shared_data.display_instance
-        
+
         ragnar_thread = threading.Thread(target=ragnar.run)
         ragnar_thread.start()
-
-        if shared_data.config["websrv"]:
-            logger.info("Starting the web server...")
-            from webapp_modern import run_server
-            web_thread = threading.Thread(target=run_server)
-            web_thread.start()
-        else:
-            web_thread = None
 
         signal.signal(signal.SIGINT, lambda sig, frame: handle_exit(sig, frame, display_thread, ragnar_thread, web_thread))
         signal.signal(signal.SIGTERM, lambda sig, frame: handle_exit(sig, frame, display_thread, ragnar_thread, web_thread))

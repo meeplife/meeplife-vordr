@@ -16,8 +16,11 @@ KNOWN_EPD_TYPES = [
     "epd2in13",
     "epd2in9_V2",
     "epd3in7",
+    "epd4in26",
     "gc9a01",
     "ssd1306",
+    "max7219_4panel",
+    "max7219_8panel",
 ]
 
 class EPDHelper:

@@ -45,6 +45,7 @@ class Logger:
     def __init__(self, name, level=logging.DEBUG, enable_file_logging=True):
         self.logger = logging.getLogger(name)
         self.logger.setLevel(level)
+        self.logger.propagate = False  # Prevent duplicate logs via root logger
         self.enable_file_logging = enable_file_logging
 
         vertical_filter = VerticalFilter()

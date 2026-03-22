@@ -415,7 +415,7 @@ class WiFiManager:
         
         # Close AP logger
         try:
-            if hasattr(self, 'ap_logger') and hasattr(self.ap_logger, 'handlers'):
+            if hasattr(self, 'ap_logger') and isinstance(self.ap_logger, logging.Logger):
                 self.ap_logger.info("AP logger shutting down")
                 for handler in self.ap_logger.handlers[:]:
                     handler.close()

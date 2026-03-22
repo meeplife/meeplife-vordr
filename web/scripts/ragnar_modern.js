@@ -223,7 +223,7 @@ const configMetadata = {
     },
     displaying_csv: {
         label: "Display Scan CSV",
-        description: "Push the most recent scan CSV results to the e-paper display after each network sweep."
+        description: "Push the most recent scan CSV results to the display after each network sweep."
     },
     log_debug: {
         label: "Log Debug Messages",
@@ -255,7 +255,7 @@ const configMetadata = {
     },
     screen_delay: {
         label: "Screen Update Delay (s)",
-        description: "Seconds between e-paper display refreshes."
+        description: "Seconds between display refreshes."
     },
     comment_delaymin: {
         label: "Comment Delay Min (s)",
@@ -271,11 +271,11 @@ const configMetadata = {
     },
     image_display_delaymin: {
         label: "Image Display Min (s)",
-        description: "Minimum time an image remains on the e-paper display."
+        description: "Minimum time an image remains on the display."
     },
     image_display_delaymax: {
         label: "Image Display Max (s)",
-        description: "Maximum time an image remains on the e-paper display."
+        description: "Maximum time an image remains on the display."
     },
     scan_interval: {
         label: "Scan Interval (s)",
@@ -295,19 +295,19 @@ const configMetadata = {
     },
     ref_width: {
         label: "Reference Width",
-        description: "Reference pixel width used to scale drawings for the e-paper display."
+        description: "Reference pixel width used to scale drawings for the display."
     },
     ref_height: {
         label: "Reference Height",
-        description: "Reference pixel height used to scale drawings for the e-paper display."
+        description: "Reference pixel height used to scale drawings for the display."
     },
     screen_reversed: {
-        label: "Flip E-Paper Output",
-        description: "Rotate the Waveshare e-paper output 180° so the content appears upright when the panel is mounted upside down."
+        label: "Flip Display Output",
+        description: "Rotate the display output 180° so the content appears upright when the panel is mounted upside down."
     },
     epd_type: {
         label: "EPD Type",
-        description: "Model identifier for the connected Waveshare e-paper display."
+        description: "Model identifier for the connected display."
     },
     gc9a01_mascot_color: {
         label: "GC9A01 Mascot Tint Color",
@@ -320,6 +320,22 @@ const configMetadata = {
     display_brightness: {
         label: "Display Brightness",
         description: "Brightness level for non-e-ink displays (SSD1306, GC9A01, MAX7219). Range 0–15. Default: 8."
+    },
+    spi_clock_mhz: {
+        label: "SPI Clock Speed (MHz)",
+        description: "SPI bus clock speed for the e-paper display in MHz. Lower values improve signal integrity when a PiSugar battery is stacked on the GPIO header. Default: 2 MHz. Try 1 MHz if you still see corrupted pixels."
+    },
+    max7219_spi_port: {
+        label: "MAX7219 SPI Port",
+        description: "SPI bus port for MAX7219 LED matrix (default: 0)"
+    },
+    max7219_spi_device: {
+        label: "MAX7219 SPI Device",
+        description: "SPI chip-enable pin for MAX7219 (0 = CE0, 1 = CE1, default: 0)"
+    },
+    max7219_block_orientation: {
+        label: "MAX7219 Block Orientation",
+        description: "Rotation of each 8×8 block (degrees). Try 0, 90, -90, or 180 if display looks wrong. Default: 0"
     },
     portlist: {
         label: "Additional Ports",
@@ -481,6 +497,7 @@ function epdTypeToSizeKey(epd_type) {
     if (epd_type.startsWith('epd2in7')) return '2in7';
     if (epd_type.startsWith('epd2in9')) return '2in9';
     if (epd_type.startsWith('epd3in7')) return '3in7';
+    if (epd_type.startsWith('epd4in26')) return '4in26';
     if (epd_type === 'gc9a01') return '1in28_tft';
     if (epd_type === 'ssd1306') return '0in96_oled';
     if (epd_type === 'lcd1602') return 'lcd1602';
@@ -494,9 +511,12 @@ const displaySelectOptions = {
         { value: '2in7', label: '2.7" e-Paper (176x264)' },
         { value: '2in9', label: '2.9" e-Paper (128x296)' },
         { value: '3in7', label: '3.7" e-Paper (280x480)' },
+        { value: '4in26', label: '4.26" e-Paper (800x480)' },
         { value: '1in28_tft', label: '1.28" GC9A01 Round TFT (240x240)' },
         { value: '0in96_oled', label: '0.96" SSD1306 OLED (128x64)' },
-        { value: 'lcd1602', label: '16×2 LCD1602 Character LCD (I2C)' }
+        { value: 'lcd1602', label: '16×2 LCD1602 Character LCD (I2C)' },
+        { value: 'max7219_8panel', label: 'MAX7219 8-panel LED Matrix (64×8)' },
+        { value: 'max7219_4panel', label: 'MAX7219 4-panel LED Matrix (32×8)' }
     ],
     screen_reversed: [
         { value: 'false', label: 'Normal orientation' },
@@ -1033,6 +1053,11 @@ async function loadTabData(tabName) {
             // Always refresh network data when switching to this tab
             await loadNetworkData();
             break;
+        case 'networks':
+            if (!alreadyPreloaded) {
+                await loadAllNetworksData();
+            }
+            break;
         case 'connect':
             if (!alreadyPreloaded) {
                 await loadConnectData();
@@ -1045,6 +1070,9 @@ async function loadTabData(tabName) {
         case 'pentest':
             if (manualModeActive) {
                 await loadPentestData();
+                checkAirSnitchInstalled();
+                populateAirSnitchInterfaceDropdowns();
+                refreshAirSnitchResults();
             } else {
                 addConsoleMessage('Enable Pentest Mode to access the Pentest tab', 'warning');
                 showTab('dashboard');
@@ -1314,6 +1342,220 @@ async function loadNetworkData() {
         addConsoleMessage('Failed to load network data', 'error');
     }
 }
+
+async function loadNetworkData() {
+    try {
+        // Use the new stable network data endpoint
+        await loadStableNetworkData();
+        
+        // Update the status detection info banner with current config
+        updateNetworkStatusBanner();
+    } catch (error) {
+        console.error('Error loading network data:', error);
+        addConsoleMessage('Failed to load network data', 'error');
+    }
+}
+
+// ============================================================================
+// ALL SCANNED NETWORKS TAB (PR 3)
+// ============================================================================
+
+async function loadAllNetworksData() {
+    const container = document.getElementById('networks-list-container');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="text-center text-gray-400 py-12">
+            <svg class="w-8 h-8 inline animate-spin mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <p>Loading AP Archive…</p>
+        </div>`;
+
+    try {
+        const data = await fetchAPI('/api/networks/all');
+        displayAllNetworks(data);
+        preloadedTabs.add('networks');
+    } catch (error) {
+        console.error('Error loading all networks:', error);
+        container.innerHTML = `
+            <div class="text-center text-red-400 py-12">
+                <p class="text-sm">Failed to load AP Archive: ${escapeHtml(error.message)}</p>
+            </div>`;
+    }
+}
+
+function displayAllNetworks(data) {
+    const container = document.getElementById('networks-list-container');
+    if (!container) return;
+
+    const networks = data.networks || [];
+
+    if (networks.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-400 py-16">
+                <svg class="w-16 h-16 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+                </svg>
+                <p class="text-lg font-medium">No access points recorded yet</p>
+                <p class="text-sm text-gray-500 mt-2">Networks will appear here after Ragnar connects and scans them.</p>
+            </div>`;
+        return;
+    }
+
+    let html = `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">`;
+
+    networks.forEach(net => {
+        const ssid = escapeHtml(net.ssid || net.slug);
+        const lastSeen = escapeHtml(net.last_seen || 'Unknown');
+        const fileCount = net.file_count || 0;
+
+        const badges = [];
+        if (net.has_loot)  badges.push('<span class="px-2 py-0.5 rounded text-xs bg-yellow-500 bg-opacity-20 text-yellow-300">Loot</span>');
+        if (net.has_creds) badges.push('<span class="px-2 py-0.5 rounded text-xs bg-green-500 bg-opacity-20 text-green-300">Creds</span>');
+        if (net.has_vulns) badges.push('<span class="px-2 py-0.5 rounded text-xs bg-red-500 bg-opacity-20 text-red-300">Vulns</span>');
+        if (net.has_scans) badges.push('<span class="px-2 py-0.5 rounded text-xs bg-blue-500 bg-opacity-20 text-blue-300">Scans</span>');
+
+        html += `
+            <button type="button"
+                    onclick="openNetworkFilePanel(${JSON.stringify(net.slug).replace(/"/g, '&quot;')}, ${JSON.stringify(net.ssid || net.slug).replace(/"/g, '&quot;')})"
+                    class="text-left bg-gray-800 hover:bg-gray-700 rounded-xl p-5 transition-colors border border-gray-700 hover:border-Ragnar-500 focus:outline-none focus:ring-2 focus:ring-Ragnar-500">
+                <div class="flex items-start justify-between mb-3">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <svg class="w-5 h-5 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path>
+                        </svg>
+                        <span class="font-semibold text-white truncate" title="${ssid}">${ssid}</span>
+                    </div>
+                    <svg class="w-4 h-4 text-gray-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                </div>
+                <div class="text-xs text-gray-400 mb-3">
+                    <span>${fileCount} file${fileCount !== 1 ? 's' : ''}</span>
+                    ${lastSeen ? `<span class="mx-1">·</span><span>${lastSeen}</span>` : ''}
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                    ${badges.length ? badges.join('') : '<span class="text-xs text-gray-600">No data yet</span>'}
+                </div>
+            </button>`;
+    });
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+async function openNetworkFilePanel(slug, ssid) {
+    const panel = document.getElementById('networks-file-panel');
+    const listContainer = document.getElementById('networks-list-container');
+    const title = document.getElementById('networks-file-panel-title');
+    const fileContainer = document.getElementById('networks-file-list-container');
+
+    if (!panel || !title || !fileContainer) return;
+
+    title.textContent = ssid;
+    listContainer.classList.add('hidden');
+    panel.classList.remove('hidden');
+
+    fileContainer.innerHTML = `
+        <div class="text-center text-gray-400 py-8">
+            <svg class="w-6 h-6 inline animate-spin mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <p>Loading files…</p>
+        </div>`;
+
+    try {
+        const data = await fetchAPI(`/api/networks/${encodeURIComponent(slug)}/files`);
+        displayNetworkFiles(data);
+    } catch (error) {
+        fileContainer.innerHTML = `
+            <div class="text-center text-red-400 py-8">
+                <p class="text-sm">Failed to load files: ${escapeHtml(error.message)}</p>
+            </div>`;
+    }
+}
+
+function closeNetworkFilePanel() {
+    const panel = document.getElementById('networks-file-panel');
+    const listContainer = document.getElementById('networks-list-container');
+    if (panel) panel.classList.add('hidden');
+    if (listContainer) listContainer.classList.remove('hidden');
+}
+
+const NETWORK_FILE_CATEGORY_LABELS = {
+    data_stolen:    { label: 'Loot',             color: 'text-yellow-300' },
+    credentials:    { label: 'Credentials',      color: 'text-green-300'  },
+    vulnerabilities:{ label: 'Vulnerabilities',  color: 'text-red-300'    },
+    scan_results:   { label: 'Scan Results',     color: 'text-blue-300'   },
+};
+
+function displayNetworkFiles(data) {
+    const container = document.getElementById('networks-file-list-container');
+    if (!container) return;
+
+    const files = data.files || [];
+
+    if (files.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-gray-400 py-12">
+                <svg class="w-12 h-12 mx-auto mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h4a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path>
+                </svg>
+                <p>No files collected for this network yet.</p>
+            </div>`;
+        return;
+    }
+
+    // Group by category
+    const grouped = {};
+    files.forEach(f => {
+        if (!grouped[f.category]) grouped[f.category] = [];
+        grouped[f.category].push(f);
+    });
+
+    let html = '';
+    const categoryOrder = ['data_stolen', 'credentials', 'vulnerabilities', 'scan_results'];
+
+    categoryOrder.forEach(cat => {
+        if (!grouped[cat] || grouped[cat].length === 0) return;
+        const meta = NETWORK_FILE_CATEGORY_LABELS[cat] || { label: cat, color: 'text-gray-300' };
+
+        html += `
+            <div class="mb-6">
+                <h4 class="text-sm font-semibold uppercase tracking-wider ${meta.color} mb-3">${meta.label} (${grouped[cat].length})</h4>
+                <div class="space-y-2">`;
+
+        grouped[cat].forEach(file => {
+            const fname = escapeHtml(file.filename);
+            const size  = escapeHtml(file.size || '');
+            const mod   = escapeHtml(file.modified || '');
+            const vpath = file.virtual_path ? encodeURIComponent(file.virtual_path) : '';
+            const clickable = !!vpath;
+
+            html += `
+                <div class="flex items-center justify-between bg-gray-800 rounded-lg px-4 py-3 ${clickable ? 'hover:bg-gray-700 cursor-pointer' : ''} transition-colors"
+                     ${clickable ? `onclick="openLootFile('${vpath}')"` : ''}>
+                    <div class="flex items-center gap-3 min-w-0">
+                        <svg class="w-4 h-4 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        <span class="text-sm text-white truncate" title="${fname}">${fname}</span>
+                    </div>
+                    <div class="flex items-center gap-4 text-xs text-gray-400 flex-shrink-0 ml-4">
+                        ${size ? `<span>${size}</span>` : ''}
+                        ${mod  ? `<span class="hidden sm:inline">${mod}</span>` : ''}
+                        ${clickable ? `<svg class="w-4 h-4 text-Ragnar-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>` : ''}
+                    </div>
+                </div>`;
+        });
+
+        html += `</div></div>`;
+    });
+
+    container.innerHTML = html;
+}
+
 
 async function updateNetworkStatusBanner() {
     try {
@@ -4801,8 +5043,8 @@ function updatePwnToggleAvailability(isHeadless) {
 // ============================================================================
 
 /**
- * Detect and handle headless mode (server installations without e-paper display)
- * Headless mode hides E-Paper related UI elements
+ * Detect and handle headless mode (server installations without a display)
+ * Headless mode hides display-related UI elements
  */
 async function handleHeadlessMode() {
     try {
@@ -4813,10 +5055,10 @@ async function handleHeadlessMode() {
         headlessMode = isHeadless;
         
         if (isHeadless) {
-            console.log('[Headless] Headless mode detected - hiding E-Paper UI elements');
+            console.log('[Headless] Headless mode detected - hiding Display UI elements');
             applyHeadlessVisibility(true);
         } else {
-            console.log('[Headless] Display mode detected - E-Paper UI elements visible');
+            console.log('[Headless] Display mode detected - Display UI elements visible');
             applyHeadlessVisibility(false);
         }
         
@@ -4836,25 +5078,25 @@ async function handleHeadlessMode() {
  * @param {boolean} isHeadless - Whether the system is in headless mode
  */
 function applyHeadlessVisibility(isHeadless) {
-    // Find all elements that require a display (E-Paper)
+    // Find all elements that require a display
     const displayElements = document.querySelectorAll('.requires-display');
     
     if (isHeadless) {
-        // Hide all E-Paper related elements
+        // Hide all display-related elements
         displayElements.forEach(el => {
             el.style.display = 'none';
             el.setAttribute('data-hidden-by-headless', 'true');
         });
         
-        console.log(`[Headless] Hidden ${displayElements.length} E-Paper UI elements`);
+        console.log(`[Headless] Hidden ${displayElements.length} Display UI elements`);
         
-        // If user is currently on E-Paper tab, redirect to dashboard
+        // If user is currently on Display tab, redirect to dashboard
         if (currentTab === 'epaper') {
-            console.log('[Headless] Redirecting from E-Paper tab to dashboard');
+            console.log('[Headless] Redirecting from Display tab to dashboard');
             showTab('dashboard');
         }
     } else {
-        // Show all E-Paper related elements
+        // Show all display-related elements
         displayElements.forEach(el => {
             if (el.getAttribute('data-hidden-by-headless') === 'true') {
                 el.style.display = '';
@@ -4862,7 +5104,7 @@ function applyHeadlessVisibility(isHeadless) {
             }
         });
         
-        console.log(`[Headless] Restored ${displayElements.length} E-Paper UI elements`);
+        console.log(`[Headless] Restored ${displayElements.length} Display UI elements`);
     }
 }
 
@@ -5201,16 +5443,16 @@ async function checkForUpdates() {
 
         if (gitStatus.has_conflicts) {
             if (updateBtn) {
-                updateBtn.disabled = true;
-                updateBtn.onclick = null;
-                updateBtn.className = 'w-full bg-red-700 text-white py-2 px-4 rounded cursor-not-allowed';
+                updateBtn.disabled = false;
+                updateBtn.onclick = resolveGitConflicts;
+                updateBtn.className = 'w-full bg-red-600 hover:bg-red-700 text-white py-2 px-4 rounded transition-colors';
                 updateElement('update-btn-text', 'Resolve Git Conflicts');
             }
             updateElement('update-status', 'Local Conflict');
             if (updateStatusEl) {
                 updateStatusEl.className = 'text-sm px-2 py-1 rounded bg-red-700 text-red-200';
             }
-            addConsoleMessage('Local git conflicts detected. Resolve them before updating.', 'error');
+            addConsoleMessage('Local git conflicts detected. Click "Resolve Git Conflicts" to reset and update.', 'warning');
             return;
         }
 
@@ -5282,6 +5524,34 @@ async function fixGitConfig() {
         const updateBtn = document.getElementById('update-btn');
         updateBtn.disabled = false;
         updateElement('update-btn-text', 'Fix Git Config');
+    }
+}
+
+async function resolveGitConflicts() {
+    const updateBtn = document.getElementById('update-btn');
+    try {
+        updateBtn.disabled = true;
+        updateElement('update-btn-text', 'Resolving...');
+        addConsoleMessage('Resolving git conflicts and pulling latest update...', 'info');
+
+        const result = await postAPI('/api/system/resolve-conflicts', {});
+
+        if (result.success) {
+            addConsoleMessage('Conflicts resolved and update applied. Restarting...', 'success');
+            if (result.warnings && result.warnings.length) {
+                result.warnings.forEach(w => addConsoleMessage(w, 'warning'));
+            }
+            updateElement('update-btn-text', 'Done');
+        } else {
+            addConsoleMessage(`Failed to resolve conflicts: ${result.error}`, 'error');
+            updateBtn.disabled = false;
+            updateElement('update-btn-text', 'Resolve Git Conflicts');
+        }
+    } catch (error) {
+        console.error('Error resolving git conflicts:', error);
+        addConsoleMessage('Failed to resolve git conflicts', 'error');
+        updateBtn.disabled = false;
+        updateElement('update-btn-text', 'Resolve Git Conflicts');
     }
 }
 
@@ -7867,7 +8137,12 @@ function updatePentestSummary(testType, data) {
         const count = pentestResults.movement_tracking.data.readings?.length || 0;
         summaryLines.push(`Movement Tracking: ${count} readings collected`);
     }
-    
+    if (pentestResults.airsnitch) {
+        const d = pentestResults.airsnitch.data;
+        const state = d.network_isolated ? 'Isolated ✓' : `${d.vulnerable_count}/${d.total_tests} failed ✗`;
+        summaryLines.push(`AirSnitch: ${state}`);
+    }
+
     contentDiv.innerHTML = summaryLines.map(line => `<div>• ${line}</div>`).join('');
 }
 
@@ -7893,6 +8168,226 @@ async function downloadPentestReport() {
     } catch (error) {
         console.error('Report download error:', error);
         addConsoleMessage(`Failed to download report: ${error.message}`, 'error');
+    }
+}
+
+// ============================================================================
+// AIRSNITCH – Wi-Fi Client Isolation Testing
+// ============================================================================
+
+async function populateAirSnitchInterfaceDropdowns() {
+    const victimSel   = document.getElementById('airsnitch-iface-victim');
+    const attackerSel = document.getElementById('airsnitch-iface-attacker');
+    if (!victimSel || !attackerSel) return;
+
+    try {
+        const [wifiData, ethData] = await Promise.allSettled([
+            fetchAPI('/api/wifi/interfaces'),
+            fetchAPI('/api/ethernet/interfaces'),
+        ]);
+
+        const ifaces = [];
+        if (wifiData.status === 'fulfilled' && Array.isArray(wifiData.value?.interfaces)) {
+            wifiData.value.interfaces.forEach(i => {
+                const label = i.connected_ssid
+                    ? `${i.name} — ${i.connected_ssid} (${i.state})`
+                    : `${i.name} — ${i.state}`;
+                ifaces.push({ value: i.name, label });
+            });
+        }
+        if (ethData.status === 'fulfilled' && Array.isArray(ethData.value?.interfaces)) {
+            ethData.value.interfaces.forEach(i => {
+                const label = `${i.name} — ${i.state || (i.connected ? 'connected' : 'disconnected')}`;
+                ifaces.push({ value: i.name, label });
+            });
+        }
+
+        if (ifaces.length === 0) return;
+
+        const prevVictim   = victimSel.value;
+        const prevAttacker = attackerSel.value;
+
+        [victimSel, attackerSel].forEach(sel => {
+            sel.innerHTML = '';
+            ifaces.forEach(({ value, label }) => {
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.textContent = label;
+                sel.appendChild(opt);
+            });
+        });
+
+        // Restore previous selection if still available
+        if (ifaces.some(i => i.value === prevVictim))   victimSel.value   = prevVictim;
+        if (ifaces.some(i => i.value === prevAttacker)) attackerSel.value = prevAttacker;
+    } catch (e) {
+        // Leave defaults in place on error
+    }
+}
+
+async function checkAirSnitchInstalled() {
+    try {
+        const data = await fetchAPI('/api/airsnitch/status');
+        const notice = document.getElementById('airsnitch-install-notice');
+        if (notice) {
+            notice.classList.toggle('hidden', data.installed !== false);
+        }
+        return data.installed;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function installAirSnitch() {
+    const btn       = document.getElementById('airsnitch-install-btn');
+    const statusDiv = document.getElementById('airsnitch-status');
+    const logDiv    = document.getElementById('airsnitch-install-log');
+
+    if (btn)    { btn.disabled = true; btn.textContent = 'Installing…'; }
+    if (logDiv) { logDiv.classList.remove('hidden'); logDiv.textContent = ''; }
+    if (statusDiv) { statusDiv.classList.remove('hidden'); statusDiv.textContent = 'Starting installation…'; }
+
+    try {
+        const data = await postAPI('/api/airsnitch/install', {});
+        if (!data.success) throw new Error(data.error || 'Install request failed');
+        if (statusDiv) statusDiv.textContent = data.message || 'Installation running…';
+        addConsoleMessage('AirSnitch installation started', 'info');
+
+        // Poll the install log every 2 seconds until done
+        await _pollAirSnitchInstallLog(btn, statusDiv, logDiv);
+    } catch (e) {
+        if (statusDiv) { statusDiv.classList.remove('hidden'); statusDiv.textContent = `Install failed: ${e.message}`; }
+        if (logDiv)    { logDiv.textContent += `\nERROR: ${e.message}`; }
+        addConsoleMessage(`AirSnitch install failed: ${e.message}`, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Retry Install'; }
+    }
+}
+
+async function _pollAirSnitchInstallLog(btn, statusDiv, logDiv) {
+    return new Promise((resolve) => {
+        const interval = setInterval(async () => {
+            try {
+                const data = await fetchAPI('/api/airsnitch/install-log');
+                if (logDiv && data.log !== undefined) {
+                    logDiv.textContent = data.log;
+                    logDiv.scrollTop = logDiv.scrollHeight;
+                }
+                if (!data.installing) {
+                    clearInterval(interval);
+                    if (data.installed) {
+                        if (statusDiv) statusDiv.textContent = 'Installation complete.';
+                        if (btn) { btn.disabled = false; btn.textContent = 'Installed ✓'; }
+                        // Hide the install notice since it's now installed
+                        const notice = document.getElementById('airsnitch-install-notice');
+                        if (notice) notice.classList.add('hidden');
+                        addConsoleMessage('AirSnitch installed successfully', 'success');
+                    } else {
+                        if (statusDiv) statusDiv.textContent = 'Installation failed – see log above.';
+                        if (btn) { btn.disabled = false; btn.textContent = 'Retry Install'; }
+                        addConsoleMessage('AirSnitch installation failed', 'error');
+                    }
+                    resolve();
+                }
+            } catch (e) {
+                clearInterval(interval);
+                if (btn) { btn.disabled = false; btn.textContent = 'Retry Install'; }
+                resolve();
+            }
+        }, 2000);
+    });
+}
+
+async function runAirSnitch() {
+    const btn = document.getElementById('airsnitch-run-btn');
+    const statusDiv = document.getElementById('airsnitch-status');
+
+    const ifaceVictim   = document.getElementById('airsnitch-iface-victim')?.value.trim()   || 'wlan1';
+    const ifaceAttacker = document.getElementById('airsnitch-iface-attacker')?.value.trim() || 'wlan2';
+    const server        = document.getElementById('airsnitch-server')?.value.trim()          || '8.8.8.8';
+    const sameBss       = document.getElementById('airsnitch-same-bss')?.checked             || false;
+    const tests         = [...document.querySelectorAll('.airsnitch-test-check:checked')].map(cb => cb.value);
+    const victimSsid    = document.getElementById('airsnitch-victim-ssid')?.value.trim()    || '';
+    const victimPsk     = document.getElementById('airsnitch-victim-psk')?.value            || '';
+    const attackerSsid  = document.getElementById('airsnitch-attacker-ssid')?.value.trim()  || '';
+    const attackerPsk   = document.getElementById('airsnitch-attacker-psk')?.value          || '';
+
+    if (tests.length === 0) {
+        if (statusDiv) { statusDiv.classList.remove('hidden'); statusDiv.textContent = 'Select at least one test.'; }
+        return;
+    }
+
+    const originalText = btn?.textContent || 'Run AirSnitch';
+    if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+    if (statusDiv) { statusDiv.classList.remove('hidden'); statusDiv.textContent = 'Tests running in background…'; }
+
+    try {
+        const body = {
+            iface_victim: ifaceVictim,
+            iface_attacker: ifaceAttacker,
+            server: server,
+            same_bss: sameBss,
+            tests: tests,
+        };
+        if (victimSsid)   body.victim_ssid    = victimSsid;
+        if (victimPsk)    body.victim_psk     = victimPsk;
+        if (attackerSsid) body.attacker_ssid  = attackerSsid;
+        if (attackerPsk)  body.attacker_psk   = attackerPsk;
+        const data = await postAPI('/api/airsnitch/run', body);
+        if (statusDiv) statusDiv.textContent = data.message || 'Started.';
+        addConsoleMessage('AirSnitch tests started', 'info');
+
+        // Poll for results after a short delay
+        setTimeout(refreshAirSnitchResults, 10000);
+    } catch (e) {
+        if (statusDiv) statusDiv.textContent = `Error: ${e.message}`;
+        addConsoleMessage(`AirSnitch failed: ${e.message}`, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = originalText; }
+    }
+}
+
+async function refreshAirSnitchResults() {
+    try {
+        const data = await fetchAPI('/api/airsnitch/results');
+        const resultsDiv   = document.getElementById('airsnitch-results');
+        const contentDiv   = document.getElementById('airsnitch-results-content');
+        if (!resultsDiv || !contentDiv) return;
+
+        if (!data.results) {
+            return; // No results yet – keep panel hidden
+        }
+
+        resultsDiv.classList.remove('hidden');
+        const r = data.results;
+        const summary = r.summary || {};
+        const lines = [];
+
+        lines.push(`<div class="text-gray-400">⏱ ${r.timestamp || ''}</div>`);
+        lines.push(`<div>Interfaces: victim=<span class="text-cyan-400">${r.iface_victim}</span> attacker=<span class="text-cyan-400">${r.iface_attacker}</span></div>`);
+
+        if (summary.network_isolated === true) {
+            lines.push(`<div class="text-green-400 font-bold">✓ Network PASSES client isolation (${summary.total_tests} tests)</div>`);
+        } else if (summary.vulnerable_count > 0) {
+            lines.push(`<div class="text-red-400 font-bold">✗ Network FAILS client isolation – ${summary.vulnerable_count}/${summary.total_tests} test(s) vulnerable</div>`);
+        }
+
+        for (const [name, result] of Object.entries(r.tests || {})) {
+            const icon  = result.vulnerable ? '✗' : '✓';
+            const color = result.vulnerable ? 'text-red-400' : 'text-green-400';
+            const label = name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            lines.push(`<div class="${color}">${icon} ${label}</div>`);
+        }
+
+        contentDiv.innerHTML = lines.join('');
+
+        // Feed into pentest summary
+        updatePentestSummary('airsnitch', {
+            vulnerable_count: summary.vulnerable_count || 0,
+            total_tests: summary.total_tests || 0,
+            network_isolated: summary.network_isolated,
+        });
+    } catch (e) {
+        console.error('AirSnitch results error:', e);
     }
 }
 
@@ -9428,16 +9923,21 @@ function displayConfigForm(config) {
         'General': ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'],
         'Network': ['network_max_failed_pings'],
         'Timing': ['startup_delay', 'web_delay', 'screen_delay', 'scan_interval'],
-        'Display': ['epd_type', 'screen_reversed', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address']
+        'Display': ['epd_type', 'screen_reversed', 'spi_clock_mhz', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']
     };
     
     const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
-    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address']);
+    const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address', 'spi_clock_mhz', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']);
     const fallbackValues = {
         network_max_failed_pings: 15,
         gc9a01_mascot_color: '#96C8FF',
         ssd1306_i2c_address: '0x3C',
-        lcd1602_i2c_address: '0x27'
+        lcd1602_i2c_address: '0x27',
+        spi_clock_mhz: 2,
+        max7219_spi_port: 0,
+        max7219_spi_device: 0,
+        max7219_block_orientation: -90,
+        display_brightness: 8
     };
     const checkboxHandlers = {
         scan_vuln_running: 'handleVulnScanToggle(this)',
@@ -9548,6 +10048,63 @@ function displayConfigForm(config) {
                             <p class="text-xs text-gray-500">Most PCF8574 backpacks use 0x27. Address is auto-detected if unreachable.</p>
                         </div>
                     `;
+                } else if (key === 'max7219_spi_port') {
+                    const spiPort = (value !== undefined && value !== null) ? value : 0;
+                    html += `
+                        <div class="space-y-2" id="cfg-max7219-spi-port-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-max7219-spi-port-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${spiPort}" min="0" max="1">
+                            <p class="text-xs text-gray-500">SPI bus (0 = SPI0, 1 = SPI1). Default: 0.</p>
+                        </div>
+                    `;
+                } else if (key === 'max7219_block_orientation') {
+                    const orient = (value !== undefined && value !== null) ? value : -90;
+                    html += `
+                        <div class="space-y-2" id="cfg-max7219-block-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-max7219-block-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${orient}" step="90">
+                            <p class="text-xs text-gray-500">Rotation of each 8×8 block in degrees (0, 90, -90, 180). Try -90 if display looks sideways.</p>
+                        </div>
+                    `;
+                } else if (key === 'display_brightness') {
+                    const brightness = (value !== undefined && value !== null) ? value : 8;
+                    html += `
+                        <div class="space-y-2" id="cfg-display-brightness-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-display-brightness-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${brightness}" min="0" max="15">
+                            <p class="text-xs text-gray-500">Brightness 0–15. Applies to MAX7219, SSD1306, GC9A01. Default: 8.</p>
+                        </div>
+                    `;
+                } else if (key === 'spi_clock_mhz') {
+                    const clockMhz = (value !== undefined && value !== null) ? value : 2;
+                    html += `
+                        <div class="space-y-2" id="cfg-spi-clock-row">
+                            <label class="flex items-center gap-2 text-sm text-gray-400">
+                                ${label}
+                                <span class="info-icon" tabindex="0" role="button" aria-label="${description}" data-tooltip="${description}">ⓘ</span>
+                            </label>
+                            <input type="number" name="${key}" id="cfg-spi-clock-input"
+                                   class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                                   value="${clockMhz}" min="0.5" max="4" step="0.5">
+                            <p class="text-xs text-gray-500">2 MHz recommended with PiSugar. Drop to 1 MHz if pixels are still corrupted. Takes effect after service restart.</p>
+>>>>>>> upstream/main
+                        </div>
+                    `;
                 } else {
                     html += `
                         <div class="space-y-2">
@@ -9580,21 +10137,31 @@ function displayConfigForm(config) {
         await saveConfig(e.target);
     });
 
-    // Show/hide GC9A01 colour row based on selected display type
+    // Show/hide display-type-specific rows based on selected display type
     const epdSelect = document.querySelector('select[name="epd_type"]');
     const colorRow = document.getElementById('cfg-gc9a01-color-row');
     const addrRow = document.getElementById('cfg-ssd1306-addr-row');
     const lcdAddrRow = document.getElementById('cfg-lcd1602-addr-row');
+    const max7219SpiPortRow = document.getElementById('cfg-max7219-spi-port-row');
+    const max7219SpiDevRow = document.getElementById('cfg-max7219-spi-device-row');
+    const max7219BlockRow = document.getElementById('cfg-max7219-block-row');
+    const brightnessRow = document.getElementById('cfg-display-brightness-row');
+    const spiClockRow = document.getElementById('cfg-spi-clock-row');
     function syncDisplayRows() {
-        if (colorRow && epdSelect) {
-            colorRow.style.display = (epdSelect.value === '1in28_tft') ? '' : 'none';
-        }
-        if (addrRow && epdSelect) {
-            addrRow.style.display = (epdSelect.value === '0in96_oled') ? '' : 'none';
-        }
-        if (lcdAddrRow && epdSelect) {
-            lcdAddrRow.style.display = (epdSelect.value === 'lcd1602') ? '' : 'none';
-        }
+        const val = epdSelect ? epdSelect.value : '';
+        const isMax7219 = val === 'max7219_8panel' || val === 'max7219_4panel';
+        const isSsd1306 = val === '0in96_oled';
+        const isGc9a01 = val === '1in28_tft';
+        const isLcd1602 = val === 'lcd1602';
+        const isEpaper = !isMax7219 && !isSsd1306 && !isGc9a01 && !isLcd1602;
+        if (colorRow) colorRow.style.display = isGc9a01 ? '' : 'none';
+        if (addrRow) addrRow.style.display = isSsd1306 ? '' : 'none';
+        if (lcdAddrRow) lcdAddrRow.style.display = isLcd1602 ? '' : 'none';
+        if (max7219SpiPortRow) max7219SpiPortRow.style.display = isMax7219 ? '' : 'none';
+        if (max7219SpiDevRow) max7219SpiDevRow.style.display = isMax7219 ? '' : 'none';
+        if (max7219BlockRow) max7219BlockRow.style.display = isMax7219 ? '' : 'none';
+        if (brightnessRow) brightnessRow.style.display = (isMax7219 || isSsd1306 || isGc9a01) ? '' : 'none';
+        if (spiClockRow) spiClockRow.style.display = isEpaper ? '' : 'none';
     }
     if (epdSelect) {
         epdSelect.addEventListener('change', syncDisplayRows);
@@ -10016,8 +10583,8 @@ async function loadEpaperDisplay() {
         }
         
     } catch (error) {
-        console.error('Error loading e-paper display:', error);
-        addConsoleMessage('Failed to load e-paper display', 'error');
+        console.error('Error loading display:', error);
+        addConsoleMessage('Failed to load display', 'error');
         
         // Update connection status
         const connectionElement = document.getElementById('epaper-connection');
@@ -10027,7 +10594,7 @@ async function loadEpaperDisplay() {
 }
 
 function refreshEpaperDisplay() {
-    addConsoleMessage('Refreshing e-paper display...', 'info');
+    addConsoleMessage('Refreshing display...', 'info');
     loadEpaperDisplay();
 }
 
@@ -10041,19 +10608,19 @@ function toggleEpaperSize() {
         imgElement.style.maxHeight = '1200px';
         imgElement.style.minHeight = '600px';
         epaperSizeMode = 'xlarge';
-        addConsoleMessage('E-paper display size: Extra Large', 'info');
+        addConsoleMessage('Display size: Extra Large', 'info');
     } else if (epaperSizeMode === 'xlarge') {
         // Switch to medium
         imgElement.style.maxHeight = '600px';
         imgElement.style.minHeight = '300px';
         epaperSizeMode = 'medium';
-        addConsoleMessage('E-paper display size: Medium', 'info');
+        addConsoleMessage('Display size: Medium', 'info');
     } else {
         // Switch back to large
         imgElement.style.maxHeight = '800px';
         imgElement.style.minHeight = '400px';
         epaperSizeMode = 'large';
-        addConsoleMessage('E-paper display size: Large', 'info');
+        addConsoleMessage('Display size: Large', 'info');
     }
 }
 

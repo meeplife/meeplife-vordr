@@ -4413,23 +4413,33 @@ def export_report():
 
 @app.route('/api/vulnerability-report/<path:filename>')
 def download_vulnerability_report(filename):
-    """Stream a vulnerability report file while preventing directory traversal."""
-    try:
-        vuln_dir = os.path.abspath(os.path.join('data', 'output', 'vulnerabilities'))
-        requested_path = os.path.normpath(os.path.join(vuln_dir, filename))
+    """Stream a vulnerability report file while preventing directory traversal.
 
-        if not requested_path.startswith(vuln_dir):
-            logger.warning(f"Blocked traversal attempt for report: {filename}")
-            return jsonify({'error': 'File not found'}), 404
+    Supports per-network directories via ?network= query param so that download
+    URLs returned by /api/vulnerability-intel can be followed directly when a
+    network context is active. Falls back to the global vulnerabilities directory
+    when no network context is provided.
+    """
+    with _network_context_from_request():
+        try:
+            vuln_dir = os.path.abspath(
+                getattr(shared_data, 'vulnerabilities_dir',
+                        os.path.join('data', 'output', 'vulnerabilities'))
+            )
+            requested_path = os.path.normpath(os.path.join(vuln_dir, filename))
 
-        if not os.path.isfile(requested_path):
-            return jsonify({'error': 'File not found'}), 404
+            if not requested_path.startswith(vuln_dir + os.sep) and requested_path != vuln_dir:
+                logger.warning(f"Blocked traversal attempt for report: {filename}")
+                return jsonify({'error': 'File not found'}), 404
 
-        rel_path = os.path.relpath(requested_path, vuln_dir)
-        return send_from_directory(vuln_dir, rel_path, as_attachment=True)
-    except Exception as exc:
-        logger.error(f"Error serving vulnerability report {filename}: {exc}")
-        return jsonify({'error': 'Unable to download report'}), 500
+            if not os.path.isfile(requested_path):
+                return jsonify({'error': 'File not found'}), 404
+
+            rel_path = os.path.relpath(requested_path, vuln_dir)
+            return send_from_directory(vuln_dir, rel_path, as_attachment=True)
+        except Exception as exc:
+            logger.error(f"Error serving vulnerability report {filename}: {exc}")
+            return jsonify({'error': 'Unable to download report'}), 500
 
 
 @app.route('/api/vulnerability-intel')
@@ -4437,7 +4447,12 @@ def get_vulnerability_intel():
     """Get interesting intelligence from scan files (not vulnerabilities - those are in threat intel)"""
     with _network_context_from_request():
         try:
-            vuln_dir = os.path.join('data', 'output', 'vulnerabilities')
+            vuln_dir = getattr(shared_data, 'vulnerabilities_dir',
+                               os.path.join('data', 'output', 'vulnerabilities'))
+            # Embed network context into download links so clicking "View Full Report"
+            # resolves the correct per-network directory.
+            _net_slug = request.args.get('network') or request.args.get('ssid') or request.args.get('slug')
+            _net_qs = f"?network={_net_slug}" if _net_slug else ""
 
             if not os.path.exists(vuln_dir):
                 return jsonify({
@@ -4626,8 +4641,8 @@ def get_vulnerability_intel():
                                 'hostname': hostname,
                                 'scan_date': scan_date,
                                 'filename': filename,
-                                'download_url': f"/api/vulnerability-report/{filename}",
-                                'log_url': f"/api/vulnerability-report/{filename}",
+                                'download_url': f"/api/vulnerability-report/{filename}{_net_qs}",
+                                'log_url': f"/api/vulnerability-report/{filename}{_net_qs}",
                                 'services': services,
                                 'total_services': len(services)
                             })
@@ -4726,8 +4741,8 @@ def get_vulnerability_intel():
                         'hostname': hostname,
                         'scan_date': scan_date,
                         'filename': filename,
-                        'download_url': f"/api/vulnerability-report/{download_target}",
-                        'log_url': f"/api/vulnerability-report/{filename}",
+                        'download_url': f"/api/vulnerability-report/{download_target}{_net_qs}",
+                        'log_url': f"/api/vulnerability-report/{filename}{_net_qs}",
                         'services': [service_entry],
                         'total_services': 1,
                         'scan_type': 'lynis'
@@ -6995,6 +7010,42 @@ def stash_and_update():
         'warnings': update_result['warnings'],
         'update_output': update_result['output']
     })
+
+@app.route('/api/system/resolve-conflicts', methods=['POST'])
+def resolve_git_conflicts():
+    """Resolve git merge conflicts by resetting to HEAD then pulling latest."""
+    repo_path = os.getcwd()
+    try:
+        # Hard reset clears both the index (staged conflicts) and working tree
+        subprocess.run(
+            ['git', 'reset', '--hard', 'HEAD'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        logger.info("Git reset --hard HEAD completed")
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.strip() or e.stdout.strip() or str(e)
+        logger.error(f"Git reset failed: {error_msg}")
+        return jsonify({'success': False, 'error': f'Git reset failed: {error_msg}'}), 500
+
+    update_result = _execute_git_update(repo_path)
+    if not update_result['success']:
+        return jsonify({
+            'success': False,
+            'error': update_result['error'] or 'Git pull failed after reset',
+            'warnings': update_result['warnings']
+        }), 500
+
+    _schedule_service_restart()
+    return jsonify({
+        'success': True,
+        'message': 'Conflicts resolved and update applied successfully.',
+        'output': update_result['output'],
+        'warnings': update_result['warnings']
+    })
+
 
 @app.route('/api/system/fix-git', methods=['POST'])
 def fix_git_safe_directory():
@@ -11723,6 +11774,169 @@ def _network_loot_dirs(network_rel_path, virtual_root):
     return dirs
 
 
+# ---------------------------------------------------------------------------
+# PR 3 — Scanned Networks Tab endpoints
+# ---------------------------------------------------------------------------
+
+@app.route('/api/networks/all')
+def get_all_scanned_networks():
+    """Return summary info for every network Ragnar has ever scanned."""
+    try:
+        networks = _list_all_networks()
+        result = []
+        for net in networks:
+            nd = net['network_dir']
+            stats = _network_dir_stats(nd)
+            result.append({
+                'slug': net['slug'],
+                'ssid': net['ssid'],
+                'last_seen': stats['last_seen'],
+                'file_count': stats['file_count'],
+                'has_loot': stats['has_loot'],
+                'has_creds': stats['has_creds'],
+                'has_vulns': stats['has_vulns'],
+                'has_scans': stats['has_scans'],
+            })
+        return jsonify({'success': True, 'networks': result, 'total': len(result)})
+    except Exception as exc:
+        logger.error(f"Error listing all networks: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+def _network_dir_stats(network_dir):
+    """Compute lightweight stats for a single network directory."""
+    import time as _time
+
+    category_paths = {
+        'has_loot':  os.path.join(network_dir, 'loot', 'data_stolen'),
+        'has_creds': os.path.join(network_dir, 'loot', 'credentials'),
+        'has_vulns': os.path.join(network_dir, 'output', 'vulnerabilities'),
+        'has_scans': os.path.join(network_dir, 'output', 'scan_results'),
+    }
+
+    flags = {}
+    file_count = 0
+    latest_mtime = 0.0
+
+    for flag, path in category_paths.items():
+        if not os.path.isdir(path):
+            flags[flag] = False
+            continue
+        entries = []
+        for root, _, files in os.walk(path):
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    mtime = os.path.getmtime(fp)
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+                    file_count += 1
+                    entries.append(fp)
+                except OSError:
+                    pass
+        flags[flag] = bool(entries)
+
+    if latest_mtime:
+        import datetime as _dt
+        last_seen = _dt.datetime.fromtimestamp(latest_mtime).strftime('%Y-%m-%d %H:%M')
+    else:
+        last_seen = ''
+
+    return {**flags, 'file_count': file_count, 'last_seen': last_seen}
+
+
+@app.route('/api/networks/<slug>/files')
+def get_network_files(slug):
+    """Return a flat list of files stored under a specific network's directory."""
+    try:
+        # Validate slug
+        if not slug or not all(c.isalnum() or c == '_' for c in slug):
+            return jsonify({'success': False, 'error': 'Invalid network slug'}), 400
+
+        networks_dir = _get_networks_dir()
+        network_dir = os.path.join(networks_dir, slug)
+
+        if not os.path.isdir(network_dir):
+            return jsonify({'success': False, 'error': 'Network not found'}), 404
+
+        # Read human-readable SSID
+        ssid = slug
+        ssid_file = os.path.join(network_dir, 'ssid.txt')
+        if os.path.exists(ssid_file):
+            try:
+                with open(ssid_file, 'r', encoding='utf-8') as _f:
+                    ssid = _f.read().strip() or slug
+            except IOError:
+                pass
+
+        # Categories to expose and their virtual path prefixes
+        categories = {
+            'data_stolen':    os.path.join(network_dir, 'loot', 'data_stolen'),
+            'credentials':    os.path.join(network_dir, 'loot', 'credentials'),
+            'vulnerabilities': os.path.join(network_dir, 'output', 'vulnerabilities'),
+            'scan_results':   os.path.join(network_dir, 'output', 'scan_results'),
+        }
+
+        files = []
+        for category, cat_dir in categories.items():
+            if not os.path.isdir(cat_dir):
+                continue
+            for root, _, filenames in os.walk(cat_dir):
+                for fname in sorted(filenames):
+                    fp = os.path.join(root, fname)
+                    try:
+                        stat = os.stat(fp)
+                        # Build a virtual path reachable via /api/files/download
+                        rel = os.path.relpath(fp, os.path.join(networks_dir))
+                        # Map back to the virtual file-browser namespace
+                        virtual_map = {
+                            'data_stolen':    '/data_stolen',
+                            'credentials':    '/crackedpwd',
+                            'vulnerabilities': '/vulnerabilities',
+                            'scan_results':   '/scan_results',
+                        }
+                        vroot = virtual_map[category]
+                        inner = os.path.relpath(fp, cat_dir).replace('\\', '/')
+                        virtual_path = f"{vroot}/{slug}/{inner}"
+
+                        files.append({
+                            'filename': fname,
+                            'category': category,
+                            'size': _format_bytes_simple(stat.st_size),
+                            'modified': _format_timestamp_simple(stat.st_mtime),
+                            'virtual_path': virtual_path,
+                        })
+                    except OSError:
+                        pass
+
+        return jsonify({
+            'success': True,
+            'slug': slug,
+            'ssid': ssid,
+            'files': files,
+            'total': len(files),
+        })
+    except Exception as exc:
+        logger.error(f"Error listing files for network '{slug}': {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+def _format_bytes_simple(size):
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if size < 1024:
+            return f"{size:.1f} {unit}" if unit != 'B' else f"{size} B"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _format_timestamp_simple(ts):
+    import datetime as _dt
+    try:
+        return _dt.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        return ''
+
+
 @app.route('/api/files/list')
 def list_files_api():
     """List files in a directory for file management"""
@@ -14900,6 +15114,147 @@ def test_pushover():
     except Exception as e:
         logger.error(f"Error testing Pushover: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ============================================================================
+# AIRSNITCH – Wi-Fi Client Isolation Testing
+# ============================================================================
+
+def _get_airsnitch_instance():
+    """Return (or lazily create) a shared AirSnitch instance."""
+    if not hasattr(shared_data, '_airsnitch'):
+        from actions.airsnitch import AirSnitch
+        shared_data._airsnitch = AirSnitch(shared_data)
+    return shared_data._airsnitch
+
+
+@app.route('/api/airsnitch/status', methods=['GET'])
+def airsnitch_status():
+    """Return AirSnitch installation status and latest results."""
+    try:
+        airsnitch = _get_airsnitch_instance()
+        installed = airsnitch.runner.is_installed()
+        latest = airsnitch.get_latest_results()
+        return jsonify({
+            'success': True,
+            'installed': installed,
+            'latest_results': latest,
+        })
+    except Exception as exc:
+        logger.error(f"airsnitch_status error: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/airsnitch/run', methods=['POST'])
+def airsnitch_run():
+    """
+    Trigger an AirSnitch client isolation test.
+
+    Optional JSON body:
+      iface_victim   (str)   – victim wireless interface   (default: wlan1)
+      iface_attacker (str)   – attacker wireless interface (default: wlan2)
+      tests          (list)  – subset of ["gtk","gateway","port_steal_down","port_steal_up"]
+      same_bss       (bool)  – test same-BSS scenario      (default: false)
+      server         (str)   – pingable server for port-steal tests (default: "8.8.8.8")
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+
+        # Temporarily override config values for this run
+        cfg_overrides = {k: v for k, v in {
+            'airsnitch_iface_victim':   data.get('iface_victim'),
+            'airsnitch_iface_attacker': data.get('iface_attacker'),
+            'airsnitch_tests':          data.get('tests'),
+            'airsnitch_same_bss':       data.get('same_bss'),
+            'airsnitch_server':         data.get('server'),
+            'airsnitch_victim_ssid':    data.get('victim_ssid'),
+            'airsnitch_victim_psk':     data.get('victim_psk'),
+            'airsnitch_attacker_ssid':  data.get('attacker_ssid'),
+            'airsnitch_attacker_psk':   data.get('attacker_psk'),
+        }.items() if v is not None}
+
+        original_cfg = {}
+        cfg = getattr(shared_data, 'config', {})
+        for k, v in cfg_overrides.items():
+            original_cfg[k] = cfg.get(k)
+            cfg[k] = v
+
+        airsnitch = _get_airsnitch_instance()
+
+        def run_in_background():
+            try:
+                airsnitch.execute()
+            finally:
+                for k, v in original_cfg.items():
+                    if v is None:
+                        cfg.pop(k, None)
+                    else:
+                        cfg[k] = v
+
+        thread = threading.Thread(target=run_in_background, daemon=True, name="airsnitch-run")
+        thread.start()
+
+        return jsonify({'success': True, 'message': 'AirSnitch test started in background'})
+
+    except Exception as exc:
+        logger.error(f"airsnitch_run error: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/airsnitch/results', methods=['GET'])
+def airsnitch_results():
+    """Return the most recent AirSnitch test results."""
+    try:
+        airsnitch = _get_airsnitch_instance()
+        results = airsnitch.get_latest_results()
+        if results is None:
+            return jsonify({'success': True, 'results': None, 'message': 'No results yet'})
+        return jsonify({'success': True, 'results': results})
+    except Exception as exc:
+        logger.error(f"airsnitch_results error: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/airsnitch/install', methods=['POST'])
+def airsnitch_install():
+    """Install AirSnitch from GitHub (runs in background, streams output to install log)."""
+    try:
+        airsnitch = _get_airsnitch_instance()
+        if airsnitch.runner.is_installed():
+            return jsonify({'success': True, 'message': 'AirSnitch is already installed', 'installing': False})
+
+        if airsnitch.is_installing():
+            return jsonify({'success': True, 'message': 'Installation already in progress', 'installing': True})
+
+        def do_install():
+            airsnitch._installing = True
+            try:
+                airsnitch.runner.install()
+            finally:
+                airsnitch._installing = False
+
+        thread = threading.Thread(target=do_install, daemon=True, name="airsnitch-install")
+        thread.start()
+        return jsonify({'success': True, 'message': 'AirSnitch installation started', 'installing': True})
+    except Exception as exc:
+        logger.error(f"airsnitch_install error: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/airsnitch/install-log', methods=['GET'])
+def airsnitch_install_log():
+    """Return the live install log and current install state."""
+    try:
+        airsnitch = _get_airsnitch_instance()
+        return jsonify({
+            'success': True,
+            'log': airsnitch.get_install_log(),
+            'installing': airsnitch.is_installing(),
+            'installed': airsnitch.runner.is_installed(),
+        })
+    except Exception as exc:
+        logger.error(f"airsnitch_install_log error: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 # ============================================================================

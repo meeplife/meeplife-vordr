@@ -3,12 +3,16 @@
 # Renders on the WiFi Pineapple Pager's 222x480 portrait LCD via pagerctl.
 #
 # Screens (cycle with LEFT/RIGHT):
-#   0: Dashboard  - stats grid, status, AI comment, level bar, character
-#   1: Hosts      - scrollable list of discovered hosts with ports
-#   2: Credentials - scrollable list of cracked credentials
+#   0: Dashboard       - stats grid, status, AI comment, level bar
+#   1: Hosts           - scrollable list of discovered hosts with ports
+#   2: Credentials     - scrollable list of cracked credentials
 #   3: Vulnerabilities - scrollable list of found vulnerabilities
+#   4: Scan Settings   - vuln scan, intervals, nmap timing, port range
+#   5: Attack Settings - enable attacks, timeouts, retry config
+#   6: Network Config  - manual mode, blacklist, WiFi, ethernet
+#   7: System Config   - web server, AI, notifications, debug
 #
-# B (RED) = pause/control menu    UP/DOWN = scroll lists
+# B (RED) = pause/control menu    UP/DOWN = scroll/select    A (GREEN) = edit setting
 
 import threading
 import time
@@ -36,9 +40,78 @@ SCREEN_DASHBOARD = 0
 SCREEN_HOSTS = 1
 SCREEN_CREDS = 2
 SCREEN_VULNS = 3
-SCREEN_COUNT = 4
+SCREEN_SCAN_SETTINGS = 4
+SCREEN_ATTACK_SETTINGS = 5
+SCREEN_NETWORK_SETTINGS = 6
+SCREEN_SYSTEM_SETTINGS = 7
+SCREEN_COUNT = 8
 
-SCREEN_NAMES = ["Dashboard", "Hosts", "Credentials", "Vulns"]
+SCREEN_NAMES = ["Dashboard", "Hosts", "Creds", "Vulns", "Scan Cfg", "Atk Cfg", "Net Cfg", "System"]
+
+# Screens that use interactive settings (UP/DOWN=select, A=edit)
+SETTINGS_SCREENS = {SCREEN_SCAN_SETTINGS, SCREEN_ATTACK_SETTINGS, SCREEN_NETWORK_SETTINGS, SCREEN_SYSTEM_SETTINGS}
+
+# ---------------------------------------------------------------------------
+# Settings page definitions
+# Each entry: key, label, type ('bool'/'int'/'choice'), plus type-specific opts
+# ---------------------------------------------------------------------------
+
+SCAN_SETTINGS = [
+    {'key': 'scan_vuln_running',    'label': 'Vuln Scan Enabled',    'type': 'bool'},
+    {'key': 'scan_vuln_no_ports',   'label': 'Scan No-Port Hosts',   'type': 'bool'},
+    {'key': 'scan_interval',        'label': 'Scan Interval (s)',     'type': 'int',    'min': 30,   'max': 3600,  'step': 30},
+    {'key': 'scan_vuln_interval',   'label': 'Vuln Interval (s)',     'type': 'int',    'min': 60,   'max': 7200,  'step': 60},
+    {'key': 'nmap_scan_aggressivity','label': 'Nmap Timing',          'type': 'choice', 'choices': ['-T1', '-T2', '-T3', '-T4', '-T5']},
+    {'key': 'portstart',            'label': 'Port Range Start',      'type': 'int',    'min': 1,    'max': 65535, 'step': 100},
+    {'key': 'portend',              'label': 'Port Range End',        'type': 'int',    'min': 1,    'max': 65535, 'step': 100},
+    {'key': 'vuln_scan_timeout',    'label': 'Vuln Timeout (s)',      'type': 'int',    'min': 60,   'max': 7200,  'step': 60},
+    {'key': 'action_timeout',       'label': 'Action Timeout (s)',    'type': 'int',    'min': 30,   'max': 3600,  'step': 30},
+]
+
+ATTACK_SETTINGS = [
+    {'key': 'enable_attacks',       'label': 'Enable Attacks',        'type': 'bool'},
+    {'key': 'retry_success_actions','label': 'Retry Success',         'type': 'bool'},
+    {'key': 'retry_failed_actions', 'label': 'Retry Failures',        'type': 'bool'},
+    {'key': 'success_retry_delay',  'label': 'Success Retry (s)',     'type': 'int',    'min': 30,   'max': 3600,  'step': 30},
+    {'key': 'failed_retry_delay',   'label': 'Failed Retry (s)',      'type': 'int',    'min': 30,   'max': 3600,  'step': 30},
+    {'key': 'timewait_ssh',         'label': 'SSH Timewait (s)',      'type': 'int',    'min': 0,    'max': 3600,  'step': 60},
+    {'key': 'timewait_ftp',         'label': 'FTP Timewait (s)',      'type': 'int',    'min': 0,    'max': 3600,  'step': 60},
+    {'key': 'timewait_smb',         'label': 'SMB Timewait (s)',      'type': 'int',    'min': 0,    'max': 3600,  'step': 60},
+    {'key': 'timewait_rdp',         'label': 'RDP Timewait (s)',      'type': 'int',    'min': 0,    'max': 3600,  'step': 60},
+    {'key': 'timewait_sql',         'label': 'SQL Timewait (s)',      'type': 'int',    'min': 0,    'max': 3600,  'step': 60},
+    {'key': 'timewait_telnet',      'label': 'Telnet Timewait (s)',   'type': 'int',    'min': 0,    'max': 3600,  'step': 60},
+]
+
+NETWORK_SETTINGS = [
+    # Pager-relevant network settings only — no Ethernet (pager has none)
+    {'key': 'manual_mode',                    'label': 'Manual Mode',         'type': 'bool'},
+    {'key': 'blacklistcheck',                 'label': 'MAC Blacklist',       'type': 'bool'},
+    {'key': 'network_max_failed_pings',       'label': 'Max Failed Pings',    'type': 'int',  'min': 1,  'max': 100, 'step': 5},
+    {'key': 'network_device_retention_days',  'label': 'Host Retention (d)',  'type': 'int',  'min': 1,  'max': 365, 'step': 1},
+    {'key': 'network_confirmation_scans',     'label': 'Confirm Scans',       'type': 'int',  'min': 1,  'max': 10,  'step': 1},
+    {'key': 'wifi_multi_network_scans_enabled','label': 'Multi-Network Scan', 'type': 'bool'},
+    {'key': 'wifi_monitor_enabled',           'label': 'WiFi Monitor',        'type': 'bool'},
+    {'key': 'wifi_connection_timeout',        'label': 'WiFi Timeout (s)',    'type': 'int',  'min': 10, 'max': 300, 'step': 10},
+    {'key': 'wifi_max_attempts',              'label': 'WiFi Max Attempts',   'type': 'int',  'min': 1,  'max': 10,  'step': 1},
+]
+
+SYSTEM_SETTINGS = [
+    # Pager-relevant system settings only.
+    # Web server is controlled by the startup menu (RAGNAR_WEB_UI env var), not this config.
+    {'key': 'ai_enabled',      'label': 'AI Features',        'type': 'bool'},
+    {'key': 'pushover_enabled','label': 'Push Notifications', 'type': 'bool'},
+    {'key': 'debug_mode',      'label': 'Debug Mode',         'type': 'bool'},
+    {'key': 'startup_delay',   'label': 'Startup Delay (s)',  'type': 'int',  'min': 0, 'max': 60,  'step': 1},
+    {'key': 'comment_delaymin','label': 'Comment Freq Min',   'type': 'int',  'min': 5, 'max': 120, 'step': 5},
+    {'key': 'comment_delaymax','label': 'Comment Freq Max',   'type': 'int',  'min': 5, 'max': 120, 'step': 5},
+]
+
+SETTINGS_MAP = {
+    SCREEN_SCAN_SETTINGS:    SCAN_SETTINGS,
+    SCREEN_ATTACK_SETTINGS:  ATTACK_SETTINGS,
+    SCREEN_NETWORK_SETTINGS: NETWORK_SETTINGS,
+    SCREEN_SYSTEM_SETTINGS:  SYSTEM_SETTINGS,
+}
 
 
 def discover_launchers():
@@ -126,6 +199,10 @@ class PagerDisplay:
         self.scroll_offset = 0
         self.dialog_showing = False
         self._handoff_launcher_path = None
+
+        # Settings screen state: per-screen selected index and scroll position
+        self._settings_selected = {s: 0 for s in SETTINGS_SCREENS}
+        self._settings_scroll = {s: 0 for s in SETTINGS_SCREENS}
 
         # Cached data for list screens
         self._hosts_data = []
@@ -237,11 +314,20 @@ class PagerDisplay:
                     self.scroll_offset = 0
 
                 elif button == Pager.BTN_UP:
-                    if self.scroll_offset > 0:
+                    if self.current_screen in SETTINGS_SCREENS:
+                        self._settings_move_selection(-1)
+                    elif self.scroll_offset > 0:
                         self.scroll_offset -= 1
 
                 elif button == Pager.BTN_DOWN:
-                    self.scroll_offset += 1
+                    if self.current_screen in SETTINGS_SCREENS:
+                        self._settings_move_selection(1)
+                    else:
+                        self.scroll_offset += 1
+
+                elif button == Pager.BTN_A:
+                    if self.current_screen in SETTINGS_SCREENS:
+                        self._settings_activate()
 
             except Exception as e:
                 logger.error(f"Error in input handler: {e}")
@@ -311,10 +397,22 @@ class PagerDisplay:
         except Exception as e:
             logger.debug(f"Error reading creds: {e}")
 
-        # Vulnerabilities from vulnerability_summary.csv
+        # Vulnerabilities from SQLite DB (primary) or vulnerability_summary.csv (fallback)
         self._vulns_data = []
         try:
-            if os.path.exists(self.shared_data.vuln_summary_file):
+            if self.shared_data.db is not None:
+                for h in self.shared_data.db.get_all_hosts():
+                    if h.get('mac') == 'STANDALONE':
+                        continue
+                    vulns = h.get('vulnerabilities', '')
+                    if vulns:
+                        self._vulns_data.append({
+                            'ip': h.get('ip', '?'),
+                            'hostname': h.get('hostname', ''),
+                            'port': h.get('ports', ''),
+                            'vulns': vulns,
+                        })
+            elif os.path.exists(self.shared_data.vuln_summary_file):
                 with open(self.shared_data.vuln_summary_file, 'r') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
@@ -355,22 +453,31 @@ class PagerDisplay:
         return False
 
     def _draw_screen_header(self, title):
-        """Draw the top header bar with title and screen dots."""
+        """Draw the top header bar with title, screen dots, and nav hint."""
         h = 24
         self.pager.fill_rect(0, 0, self.width, h, self.HEADER_BG)
         self.pager.draw_ttf(8, 2, title, self.WHITE, self.font_viking, 18)
-        # Screen indicator dots (right side)
+
+        # Compact screen indicator dots (6px spacing, fits 8 screens in 56px)
+        DOT_SIZE = 4
+        DOT_SPACING = 6
+        total_dots_w = SCREEN_COUNT * DOT_SPACING
+        dot_x_start = self.width - total_dots_w - 8
         dot_y = 10
-        dot_x = self.width - SCREEN_COUNT * 10 - 8
         for i in range(SCREEN_COUNT):
-            dx = dot_x + i * 10
-            color = self.CYAN if i == self.current_screen else self.DARK_GRAY
-            self.pager.fill_rect(dx, dot_y, 5, 5, color)
-        # Nav hints
+            dx = dot_x_start + i * DOT_SPACING
+            # Settings screens get a distinct color (purple) when inactive
+            if i in SETTINGS_SCREENS:
+                color = self.CYAN if i == self.current_screen else self.PURPLE
+            else:
+                color = self.CYAN if i == self.current_screen else self.DARK_GRAY
+            self.pager.fill_rect(dx, dot_y, DOT_SIZE, DOT_SIZE, color)
+
+        # Nav hint: show adjacent screen names compactly
         left_name = SCREEN_NAMES[(self.current_screen - 1) % SCREEN_COUNT]
         right_name = SCREEN_NAMES[(self.current_screen + 1) % SCREEN_COUNT]
-        self.pager.draw_ttf(self.width - 160, 4, f"< {left_name}  {right_name} >",
-                            self.GRAY, self.font_arial, 11)
+        hint = f"<{left_name} {right_name}>"
+        self.pager.draw_ttf(dot_x_start - 120, 4, hint, self.DARK_GRAY, self.font_arial, 10)
 
     def _draw_stat_card(self, x, y, w, h, value, label, color):
         """Draw a single stat card with big number and label."""
@@ -622,6 +729,303 @@ class PagerDisplay:
                 sb_h = max(8, int((max_y - 42) * visible / total))
                 sb_y = 42 + int((max_y - 42 - sb_h) * self.scroll_offset / max(1, total - visible))
                 self.pager.fill_rect(self.width - 3, sb_y, 2, sb_h, self.GRAY)
+
+    # ------------------------------------------------------------------
+    # Settings screens (4-7) - interactive configuration
+    # ------------------------------------------------------------------
+
+    def _get_settings_for_screen(self, screen):
+        """Return the settings list for a given settings screen."""
+        return SETTINGS_MAP.get(screen, [])
+
+    def _settings_move_selection(self, direction):
+        """Move the selection cursor on a settings screen."""
+        screen = self.current_screen
+        settings = self._get_settings_for_screen(screen)
+        if not settings:
+            return
+        n = len(settings)
+        current = self._settings_selected.get(screen, 0)
+        new_idx = (current + direction) % n
+        self._settings_selected[screen] = new_idx
+
+        # Keep scroll window in sync so selected item is always visible
+        ROW_H = 26
+        header_h = 26
+        visible = (self.height - header_h) // ROW_H
+        scroll = self._settings_scroll.get(screen, 0)
+        if new_idx < scroll:
+            scroll = new_idx
+        elif new_idx >= scroll + visible:
+            scroll = new_idx - visible + 1
+        self._settings_scroll[screen] = max(0, scroll)
+
+    def _settings_activate(self):
+        """Edit the currently selected setting on a settings screen."""
+        screen = self.current_screen
+        settings = self._get_settings_for_screen(screen)
+        if not settings:
+            return
+        idx = self._settings_selected.get(screen, 0)
+        if idx >= len(settings):
+            return
+        self._edit_setting(settings[idx])
+
+    def _save_setting(self, key, value):
+        """Persist a setting change to shared_data config and disk."""
+        try:
+            self.shared_data.config[key] = value
+            setattr(self.shared_data, key, value)
+            self.shared_data.save_config()
+            logger.info(f"Setting saved: {key} = {value}")
+        except Exception as e:
+            logger.error(f"Error saving setting {key}: {e}")
+
+    def _edit_setting(self, setting):
+        """Dispatch to the appropriate editor based on setting type."""
+        key = setting['key']
+        stype = setting['type']
+        label = setting['label']
+
+        if stype == 'bool':
+            # Boolean: immediate toggle, no dialog needed
+            current = bool(self.shared_data.config.get(key, False))
+            self._save_setting(key, not current)
+
+        elif stype == 'int':
+            self._edit_int_dialog(
+                key, label,
+                setting.get('min', 0),
+                setting.get('max', 9999),
+                setting.get('step', 1)
+            )
+
+        elif stype == 'choice':
+            self._edit_choice_dialog(key, label, setting['choices'])
+
+    def _edit_int_dialog(self, key, label, min_val, max_val, step):
+        """Show a dialog to edit an integer setting with UP/DOWN to change value."""
+        self.dialog_showing = True
+        try:
+            current = int(self.shared_data.config.get(key, min_val))
+            current = max(min_val, min(max_val, current))
+
+            # Dialog box: 400w x 148h, centred on 480x222
+            DW, DH = 400, 148
+            DX = (self.width - DW) // 2    # 40
+            DY = (self.height - DH) // 2   # 37
+
+            def draw():
+                # Box
+                self.pager.fill_rect(DX, DY, DW, DH, self.CARD_BG)
+                self.pager.rect(DX, DY, DW, DH, self.CYAN)
+                self.pager.rect(DX + 2, DY + 2, DW - 4, DH - 4, self.DARK_GRAY)
+
+                # Label — 16px (TTF_MEDIUM), readable
+                lw = self.pager.ttf_width(label[:28], self.font_arial, 16)
+                self.pager.draw_ttf((self.width - lw) // 2, DY + 10, label[:28],
+                                    self.WHITE, self.font_arial, 16)
+
+                # Value — 36px, very prominent
+                val_str = str(current)
+                vw = self.pager.ttf_width(val_str, self.font_arial, 36)
+                self.pager.draw_ttf((self.width - vw) // 2, DY + 38, val_str,
+                                    self.CYAN, self.font_arial, 36)
+
+                # Range hint — 13px (TTF_SMALL)
+                hint = f"{min_val} - {max_val}   step {step}"
+                hw = self.pager.ttf_width(hint, self.font_arial, 13)
+                self.pager.draw_ttf((self.width - hw) // 2, DY + 94, hint,
+                                    self.GRAY, self.font_arial, 13)
+
+                # Button hints — 13px
+                self.pager.draw_ttf_centered(DY + 118, "UP: increase   DOWN: decrease   A: save   B: cancel",
+                                             self.GRAY, self.font_arial, 13)
+                self.pager.flip()
+
+            draw()
+
+            while True:
+                button = self.pager.wait_button()
+                if button & Pager.BTN_UP:
+                    current = min(max_val, current + step)
+                    draw()
+                elif button & Pager.BTN_DOWN:
+                    current = max(min_val, current - step)
+                    draw()
+                elif button & Pager.BTN_A:
+                    self._save_setting(key, current)
+                    break
+                elif button & Pager.BTN_B:
+                    break
+        except Exception as e:
+            logger.error(f"Error in int dialog for {key}: {e}")
+        finally:
+            self.dialog_showing = False
+
+    def _edit_choice_dialog(self, key, label, choices):
+        """Show a dialog to select from a list of string choices."""
+        self.dialog_showing = True
+        try:
+            current_val = self.shared_data.config.get(key, choices[0])
+            try:
+                selected = choices.index(current_val)
+            except ValueError:
+                selected = 0
+
+            # Each option row: 28px.  Dialog: label(28) + options + hint(22)
+            OPT_H = 28
+            DW = 340
+            DH = 30 + len(choices) * OPT_H + 26   # e.g. 5 choices → 196px
+            DX = (self.width - DW) // 2
+            DY = max(4, (self.height - DH) // 2)
+
+            def draw():
+                self.pager.fill_rect(DX, DY, DW, DH, self.CARD_BG)
+                self.pager.rect(DX, DY, DW, DH, self.CYAN)
+
+                # Label — 16px
+                lw = self.pager.ttf_width(label[:26], self.font_arial, 16)
+                self.pager.draw_ttf((self.width - lw) // 2, DY + 7, label[:26],
+                                    self.WHITE, self.font_arial, 16)
+
+                for i, choice in enumerate(choices):
+                    cy = DY + 30 + i * OPT_H
+                    if i == selected:
+                        self.pager.fill_rect(DX + 4, cy - 2, DW - 8, OPT_H - 2, self.BLUE)
+                    cw = self.pager.ttf_width(choice, self.font_arial, 16)
+                    color = self.WHITE if i == selected else self.LIGHT_GRAY
+                    self.pager.draw_ttf((self.width - cw) // 2, cy + 4, choice,
+                                        color, self.font_arial, 16)
+
+                # Hint — 13px
+                hint_y = DY + DH - 22
+                self.pager.draw_ttf_centered(hint_y, "UP/DOWN: select   A: save   B: cancel",
+                                             self.GRAY, self.font_arial, 13)
+                self.pager.flip()
+
+            draw()
+
+            while True:
+                button = self.pager.wait_button()
+                if button & Pager.BTN_UP:
+                    selected = (selected - 1) % len(choices)
+                    draw()
+                elif button & Pager.BTN_DOWN:
+                    selected = (selected + 1) % len(choices)
+                    draw()
+                elif button & Pager.BTN_A:
+                    self._save_setting(key, choices[selected])
+                    break
+                elif button & Pager.BTN_B:
+                    break
+        except Exception as e:
+            logger.error(f"Error in choice dialog for {key}: {e}")
+        finally:
+            self.dialog_showing = False
+
+    def _get_setting_value_str(self, setting):
+        """Return a display string for the current value of a setting."""
+        key = setting['key']
+        stype = setting['type']
+        raw = self.shared_data.config.get(key)
+        if raw is None:
+            raw = getattr(self.shared_data, key, None)
+        if raw is None:
+            return '?'
+        if stype == 'bool':
+            return 'ON' if bool(raw) else 'OFF'
+        return str(raw)
+
+    def _get_setting_value_color(self, setting):
+        """Return a color for the current value display."""
+        key = setting['key']
+        stype = setting['type']
+        raw = self.shared_data.config.get(key)
+        if raw is None:
+            raw = getattr(self.shared_data, key, None)
+        if stype == 'bool':
+            # Special colors for high-impact settings
+            if key == 'enable_attacks':
+                return self.RED if bool(raw) else self.DARK_GRAY
+            if key == 'manual_mode':
+                return self.ORANGE if bool(raw) else self.GREEN
+            return self.GREEN if bool(raw) else self.DARK_GRAY
+        return self.CYAN
+
+    def _draw_settings_screen(self, screen_id, title):
+        """Generic renderer for settings screens.
+
+        Font sizes match pager_menu.py's tuned values for 480x222:
+          labels/values: 16px (TTF_MEDIUM — proven readable on this screen)
+          bottom hint:   13px (TTF_SMALL)
+        Row height 28px gives 6 visible rows in the content area.
+        """
+        self.pager.clear(self.DARK_BG)
+        self._draw_screen_header(title)
+
+        settings = self._get_settings_for_screen(screen_id)
+        if not settings:
+            self.pager.draw_ttf_centered(100, "No settings available", self.GRAY, self.font_arial, 20)
+            return
+
+        # Layout constants — tuned for 480x222 with 24px header + 18px hint bar
+        ROW_H = 28          # 28px per row → 6 rows in 168px content area
+        HINT_H = 18         # bottom hint bar height
+        y_start = 26        # immediately after 24px header + 2px gap
+        content_h = self.height - y_start - HINT_H
+        visible = content_h // ROW_H   # = 168 // 28 = 6
+
+        # Column positions
+        SEL_X = 4           # ">" selection arrow
+        LABEL_X = 20        # setting label start
+        VALUE_X = 330       # current value (right side)
+        DOT_X = self.width - 10   # type-indicator dot
+
+        scroll = self._settings_scroll.get(screen_id, 0)
+        selected = self._settings_selected.get(screen_id, 0)
+
+        for i in range(scroll, min(scroll + visible, len(settings))):
+            s = settings[i]
+            row_y = y_start + (i - scroll) * ROW_H
+            is_selected = (i == selected)
+
+            # Row background
+            if is_selected:
+                self.pager.fill_rect(2, row_y, self.width - 4, ROW_H - 2, self.BLUE)
+            elif (i - scroll) % 2 == 0:
+                self.pager.fill_rect(2, row_y, self.width - 4, ROW_H - 2, self.CARD_BG)
+
+            # Selection arrow
+            if is_selected:
+                self.pager.draw_ttf(SEL_X, row_y + 6, ">", self.CYAN, self.font_arial, 14)
+
+            # Label — 16px, same as pager_menu TTF_MEDIUM
+            label_color = self.WHITE if is_selected else self.LIGHT_GRAY
+            self.pager.draw_ttf(LABEL_X, row_y + 6, s['label'][:26], label_color, self.font_arial, 16)
+
+            # Value — 16px, color-coded by meaning
+            val_str = self._get_setting_value_str(s)
+            val_color = self._get_setting_value_color(s) if not is_selected else self.WHITE
+            self.pager.draw_ttf(VALUE_X, row_y + 6, val_str[:10], val_color, self.font_arial, 16)
+
+            # Small type-indicator dot (green=bool, cyan=int, yellow=choice)
+            type_colors = {'bool': self.GREEN, 'int': self.CYAN, 'choice': self.YELLOW}
+            self.pager.fill_rect(DOT_X, row_y + 11, 5, 5, type_colors.get(s['type'], self.GRAY))
+
+        # Scroll bar
+        total = len(settings)
+        if total > visible:
+            sb_area = content_h
+            sb_h = max(10, int(sb_area * visible / total))
+            sb_y = y_start + int((sb_area - sb_h) * scroll / max(1, total - visible))
+            self.pager.fill_rect(self.width - 3, sb_y, 2, sb_h, self.GRAY)
+
+        # Bottom hint bar — 13px (TTF_SMALL), readable without eating row space
+        hint_y = self.height - HINT_H
+        self.pager.fill_rect(0, hint_y, self.width, HINT_H, self.HEADER_BG)
+        self.pager.draw_ttf_centered(hint_y + 2, "UP/DN: select   A: edit/toggle   B: menu",
+                                     self.GRAY, self.font_arial, 13)
 
     # ------------------------------------------------------------------
     # Pause menu (kept from original)
@@ -882,6 +1286,14 @@ class PagerDisplay:
             self.draw_credentials()
         elif self.current_screen == SCREEN_VULNS:
             self.draw_vulnerabilities()
+        elif self.current_screen == SCREEN_SCAN_SETTINGS:
+            self._draw_settings_screen(SCREEN_SCAN_SETTINGS, "SCAN SETTINGS")
+        elif self.current_screen == SCREEN_ATTACK_SETTINGS:
+            self._draw_settings_screen(SCREEN_ATTACK_SETTINGS, "ATTACK SETTINGS")
+        elif self.current_screen == SCREEN_NETWORK_SETTINGS:
+            self._draw_settings_screen(SCREEN_NETWORK_SETTINGS, "NETWORK CONFIG")
+        elif self.current_screen == SCREEN_SYSTEM_SETTINGS:
+            self._draw_settings_screen(SCREEN_SYSTEM_SETTINGS, "SYSTEM CONFIG")
         if not self.dialog_showing:
             self.pager.flip()
 

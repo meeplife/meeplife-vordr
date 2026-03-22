@@ -27,8 +27,8 @@ from datetime import datetime
 try:
     from PIL import Image, ImageFont
 except ImportError:
-    Image = None
-    ImageFont = None
+    Image = None  # type: ignore[assignment]
+    ImageFont = None  # type: ignore[assignment]
 from logger import Logger
 
 try:
@@ -62,6 +62,7 @@ SIZE_KEY_TO_DEFAULT_DRIVER = {
     "2in7":     "epd2in7_V2",
     "2in9":     "epd2in9_V2",
     "3in7":     "epd3in7",
+    "4in26":    "epd4in26",
     "1in28_tft": "gc9a01",
     "0in96_oled": "ssd1306",
     "1602_lcd": "lcd1602",
@@ -96,12 +97,20 @@ DISPLAY_PROFILES = {
     "epd2in13_V2": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     "epd2in13_V3": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": True},
     "epd2in13_V4": {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
+    # Waveshare 4.26" 800x480 e-paper (landscape) — use DESIGN_REF so the
+    # scale-factor system uniformly scales the 122×250 layout up.  The
+    # vertical factor (480/250 = 1.92) dominates; we use that for the
+    # horizontal reference too so that icons/text aren't stretched.
+    "epd4in26":    {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_HEIGHT, "default_flip": False},
     # GC9A01 1.28" 240x240 round colour TFT LCD
     "gc9a01":      {"ref_width": DESIGN_REF_WIDTH, "ref_height": DESIGN_REF_WIDTH, "default_flip": False},
     # SSD1306 0.96" 128x64 monochrome OLED
     "ssd1306":     {"ref_width": 128, "ref_height": 64,  "default_flip": False},
     # LCD1602 16x2 character LCD (I2C via PCF8574 backpack)
     "lcd1602":     {"ref_width": 16,  "ref_height": 2,   "default_flip": False},
+    # MAX7219 LED matrix displays
+    "max7219_4panel": {"ref_width": 32,  "ref_height": 8, "default_flip": False},
+    "max7219_8panel": {"ref_width": 64,  "ref_height": 8, "default_flip": False},
 }
 
 
@@ -476,6 +485,9 @@ class SharedData:
             logger.warning(f"Failed to persist data before network switch: {exc}")
 
         try:
+            if self.storage_manager is None:
+                logger.error("Storage manager not available, cannot switch network")
+                return
             context = self.storage_manager.activate_network(ssid)
         except Exception as exc:
             logger.error(f"Unable to activate network storage for '{ssid}': {exc}")
@@ -556,6 +568,10 @@ class SharedData:
             "lcd1602_i2c_address": "0x27",
             "lcd1602_i2c_bus": 1,
             "display_brightness": 8,
+            "spi_clock_mhz": 2,
+            "max7219_spi_port":         0,
+            "max7219_spi_device":        0,
+            "max7219_block_orientation": -90,
             
             
             "__title_lists__": "List Settings",
@@ -831,21 +847,20 @@ class SharedData:
             self.web_screen_reversed = self.screen_reversed
             return
 
-        # Character-based displays (e.g. LCD1602) have no PIL buffer interface.
-        # Skip EPDHelper / buffer-validation entirely to prevent the auto-detect
-        # fallback from overwriting the user's chosen display type.
-        _CHAR_DISPLAYS = {"lcd1602"}
+        # Non-EPD displays (character LCDs and LED matrices) have no PIL buffer
+        # interface — skip EPDHelper init entirely for these types.
+        _NON_EPD_DISPLAYS = {"lcd1602", "max7219_4panel", "max7219_8panel"}
         epd_type_cfg = self.config.get("epd_type", DEFAULT_EPD_TYPE)
-        if epd_type_cfg in _CHAR_DISPLAYS:
+        if epd_type_cfg in _NON_EPD_DISPLAYS:
             profile = DISPLAY_PROFILES.get(epd_type_cfg, {})
             self.width  = profile.get("ref_width",  16)
             self.height = profile.get("ref_height",  2)
             self.epd_helper = None
             self.screen_reversed     = bool(self.config.get("screen_reversed", False))
             self.web_screen_reversed = self.screen_reversed
-            self.apply_display_profile(epd_type_cfg)   # keeps ref_width/ref_height in sync
+            self.apply_display_profile(epd_type_cfg)
             logger.info(
-                f"Character display '{epd_type_cfg}' configured: {self.width}x{self.height}"
+                f"Non-EPD display '{epd_type_cfg}' configured: {self.width}x{self.height}"
                 " — skipping EPD buffer init"
             )
             return
@@ -886,6 +901,7 @@ class SharedData:
 
             # Validate the driver works by doing a test getbuffer with a blank image
             try:
+                assert Image is not None
                 test_img = Image.new('1', (self.width, self.height), 255)
                 test_buf = self.epd_helper.epd.getbuffer(test_img)
                 expected_size = int(self.width / 8) * self.height
@@ -1405,8 +1421,11 @@ class SharedData:
 
     def _get_image_scale(self):
         """Get the image scale factor for the current display.
-        Always returns 1.0 — icons are drawn at their native size on all displays.
-        Wider displays (e.g. 2.7" 176x264) centre the content instead of stretching."""
+        For small displays (2.13", 2.7") icons stay at native size.
+        For large displays (4.26" 800x480) icons scale up proportionally."""
+        sy = getattr(self, 'scale_factor_y', 1.0)
+        if sy > 1.5:  # Large display (e.g. 4.26")
+            return sy
         return 1.0
 
     def load_images(self):
@@ -1439,9 +1458,10 @@ class SharedData:
             self.zombie_status = self.load_image(os.path.join(self.staticpicdir, 'zombie.bmp'), scale=img_scale)
             self.attack = self.load_image(os.path.join(self.staticpicdir, 'attack.bmp'), scale=img_scale)
 
-            # Resize frise to span full display width
-            if self.frise is not None and hasattr(self, 'width') and self.frise.width < self.width:
-                self.frise = self.frise.resize((self.width - 2, self.frise.height), Image.NEAREST)
+            # Resize frise to span full display width (and scale height on large displays)
+            if self.frise is not None and Image is not None and hasattr(self, 'width') and self.frise.width < self.width:
+                new_h = max(self.frise.height, int(self.frise.height * img_scale)) if img_scale > 1.0 else self.frise.height
+                self.frise = self.frise.resize((self.width - 2, new_h), Image.Resampling.NEAREST)
 
             """ Load the images for the different actions status"""
             # Dynamically load status images based on actions.json
@@ -1520,7 +1540,7 @@ class SharedData:
             if scale is not None and scale != 1.0 and scale > 1.05:
                 new_w = max(1, int(img.width * scale))
                 new_h = max(1, int(img.height * scale))
-                img = img.resize((new_w, new_h), Image.NEAREST)
+                img = img.resize((new_w, new_h), Image.Resampling.NEAREST)
             return img
         except Exception as e:
             logger.error(f"Error loading image {image_path}: {e}")
@@ -1577,12 +1597,14 @@ class SharedData:
 
 
     def _slug_for_ssid(self, ssid):
-        if hasattr(self.storage_manager, '_slugify'):
+        if self.storage_manager is not None and hasattr(self.storage_manager, '_slugify'):
             try:
                 return self.storage_manager._slugify(ssid)
             except Exception:
                 return self.storage_manager.default_ssid
-        return (ssid or self.storage_manager.default_ssid or 'default')
+        if self.storage_manager is not None:
+            return (ssid or self.storage_manager.default_ssid or 'default')
+        return ssid or 'default'
 
     # ── Subnet scan log helpers ──────────────────────────────────
     def append_subnet_scan_log(self, cidr, status, message, devices=None):

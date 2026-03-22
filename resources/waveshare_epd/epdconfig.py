@@ -111,10 +111,27 @@ class RaspberryPi:
         else:
             # SPI device, bus = 0, device = 0
             self.SPI.open(0, 0)
-            # Lower clock for signal integrity when PiSugar is stacked on GPIO header
-            self.SPI.max_speed_hz = 2000000
+            # Read SPI clock speed from shared config (default 2 MHz for PiSugar signal integrity)
+            self.SPI.max_speed_hz = self._read_spi_clock_hz()
             self.SPI.mode = 0b00
         return 0
+
+    def _read_spi_clock_hz(self, default_mhz=2):
+        """Read spi_clock_mhz from shared_config.json; fall back to default_mhz."""
+        try:
+            import json
+            config_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                'config', 'shared_config.json'
+            )
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                mhz = float(cfg.get('spi_clock_mhz', default_mhz))
+                return int(mhz * 1_000_000)
+        except Exception:
+            pass
+        return int(default_mhz * 1_000_000)
 
     def module_exit(self, cleanup=False):
         # logger.debug("spi end")
