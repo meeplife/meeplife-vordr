@@ -23,6 +23,24 @@ import logging
 import subprocess
 import threading
 import traceback
+
+
+def normalize_rotation(value):
+    """Normalize a screen_reversed config value to a rotation angle (0, 90, 180, 270).
+
+    Accepts booleans (legacy: True→180, False→0), integers, or string representations.
+    """
+    if isinstance(value, bool):
+        return 180 if value else 0
+    try:
+        angle = int(value)
+        if angle in (0, 90, 180, 270):
+            return angle
+    except (ValueError, TypeError):
+        pass
+    if str(value).lower() in ('true', '1'):
+        return 180
+    return 0
 from datetime import datetime
 try:
     from PIL import Image, ImageFont
@@ -161,7 +179,7 @@ class SharedData:
         # Ensure the selected EPD profile is consistent and expose flip settings early
         self.config.setdefault('epd_type', DEFAULT_EPD_TYPE)
         self.apply_display_profile(self.config['epd_type'], set_orientation_if_missing=True, persist=not self._pager_mode)
-        self.screen_reversed = bool(self.config.get('screen_reversed', False))
+        self.screen_reversed = normalize_rotation(self.config.get('screen_reversed', 0))
         self.web_screen_reversed = self.screen_reversed
 
         # Check if auth is configured and DB might be encrypted
@@ -562,7 +580,7 @@ class SharedData:
             "ref_width": default_profile["ref_width"],
             "ref_height": default_profile["ref_height"],
             "epd_type": DEFAULT_EPD_TYPE,
-            "screen_reversed": default_profile.get("default_flip", False),
+            "screen_reversed": 180 if default_profile.get("default_flip", False) else 0,
             "gc9a01_mascot_color": "#96C8FF",
             "ssd1306_i2c_address": "0x3C",
             "lcd1602_i2c_address": "0x27",
@@ -683,7 +701,7 @@ class SharedData:
 
         needs_orientation = set_orientation_if_missing and 'screen_reversed' not in self.config
         if needs_orientation:
-            desired_orientation = profile.get('default_flip', False)
+            desired_orientation = 180 if profile.get('default_flip', False) else 0
             if self.config.get('screen_reversed') != desired_orientation:
                 self.config['screen_reversed'] = desired_orientation
                 changed = True
@@ -843,7 +861,7 @@ class SharedData:
             profile = DISPLAY_PROFILES.get(epd_type, fallback_profile) or fallback_profile
             self.width = self.config.get('ref_width', profile['ref_width'])
             self.height = self.config.get('ref_height', profile['ref_height'])
-            self.screen_reversed = bool(self.config.get('screen_reversed', False))
+            self.screen_reversed = normalize_rotation(self.config.get('screen_reversed', 0))
             self.web_screen_reversed = self.screen_reversed
             return
 
@@ -856,7 +874,7 @@ class SharedData:
             self.width  = profile.get("ref_width",  16)
             self.height = profile.get("ref_height",  2)
             self.epd_helper = None
-            self.screen_reversed     = bool(self.config.get("screen_reversed", False))
+            self.screen_reversed     = normalize_rotation(self.config.get("screen_reversed", 0))
             self.web_screen_reversed = self.screen_reversed
             self.apply_display_profile(epd_type_cfg)
             logger.info(
@@ -893,9 +911,9 @@ class SharedData:
 
             self.epd_helper = EPDHelper(epd_type)
             self.apply_display_profile(epd_type)
-            self.screen_reversed = bool(self.config.get("screen_reversed", False))
+            self.screen_reversed = normalize_rotation(self.config.get("screen_reversed", 0))
             self.web_screen_reversed = self.screen_reversed
-            logger.info(f"EPD type: {epd_type} | size: {self.epd_helper.epd.width}x{self.epd_helper.epd.height} | flipped: {self.screen_reversed}")
+            logger.info(f"EPD type: {epd_type} | size: {self.epd_helper.epd.width}x{self.epd_helper.epd.height} | rotation: {self.screen_reversed}°")
             self.epd_helper.init_full_update()
             self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
 
@@ -926,7 +944,7 @@ class SharedData:
                     self.epd_helper = EPDHelper(epd_type)
                     self.epd_helper.init_full_update()
                     self.width, self.height = self.epd_helper.epd.width, self.epd_helper.epd.height
-                    self.screen_reversed = bool(self.config.get("screen_reversed", False))
+                    self.screen_reversed = normalize_rotation(self.config.get("screen_reversed", 0))
                     self.web_screen_reversed = self.screen_reversed
                     self.save_config()
                     logger.info(f"EPD {epd_type} initialized via fallback with size: {self.width}x{self.height}")
@@ -940,7 +958,7 @@ class SharedData:
             profile = DISPLAY_PROFILES.get(epd_type, fallback_profile) or fallback_profile
             self.width = self.config.get('ref_width', profile['ref_width'])
             self.height = self.config.get('ref_height', profile['ref_height'])
-            self.screen_reversed = bool(self.config.get('screen_reversed', False))
+            self.screen_reversed = normalize_rotation(self.config.get('screen_reversed', 0))
             self.web_screen_reversed = self.screen_reversed
             
             # NOTE: Test image code below was used to verify EPD hardware. 

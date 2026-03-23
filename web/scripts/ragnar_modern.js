@@ -303,7 +303,7 @@ const configMetadata = {
     },
     screen_reversed: {
         label: "Flip Display Output",
-        description: "Rotate the display output 180° so the content appears upright when the panel is mounted upside down."
+        description: "Rotate the display output. Use 180° when mounted upside down, or 90°/270° for portrait orientation."
     },
     epd_type: {
         label: "EPD Type",
@@ -519,8 +519,10 @@ const displaySelectOptions = {
         { value: 'max7219_4panel', label: 'MAX7219 4-panel LED Matrix (32×8)' }
     ],
     screen_reversed: [
-        { value: 'false', label: 'Normal orientation' },
-        { value: 'true', label: 'Flip 180°' }
+        { value: '0', label: 'Normal (0°)' },
+        { value: '90', label: 'Rotate 90°' },
+        { value: '180', label: 'Rotate 180°' },
+        { value: '270', label: 'Rotate 270°' }
     ]
 };
 
@@ -10010,7 +10012,7 @@ function displayConfigForm(config) {
         'Display': ['epd_type', 'screen_reversed', 'spi_clock_mhz', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']
     };
     
-    const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck', 'screen_reversed'];
+    const knownBooleans = ['manual_mode', 'debug_mode', 'scan_vuln_running', 'scan_vuln_no_ports', 'enable_attacks', 'blacklistcheck'];
     const alwaysShowKeys = new Set(['network_max_failed_pings', 'gc9a01_mascot_color', 'ssd1306_i2c_address', 'lcd1602_i2c_address', 'spi_clock_mhz', 'max7219_spi_port', 'max7219_spi_device', 'max7219_block_orientation', 'display_brightness']);
     const fallbackValues = {
         network_max_failed_pings: 15,
@@ -10060,6 +10062,11 @@ function displayConfigForm(config) {
                     // For epd_type, map driver name to size key so the dropdown matches
                     if (key === 'epd_type') {
                         selectedValue = epdTypeToSizeKey(selectedValue);
+                    }
+                    // For screen_reversed, normalize legacy boolean values to rotation angles
+                    if (key === 'screen_reversed') {
+                        if (selectedValue === 'true') selectedValue = '180';
+                        else if (selectedValue === 'false') selectedValue = '0';
                     }
                     html += `
                         <div class="space-y-2">

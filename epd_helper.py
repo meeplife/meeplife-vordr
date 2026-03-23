@@ -72,7 +72,8 @@ class EPDHelper:
             epd_w, epd_h = self.epd.width, self.epd.height
 
             # Ensure image matches EPD dimensions before sending to driver
-            if imw != epd_w or imh != epd_h:
+            # Allow swapped dimensions (90°/270° rotation) — getbuffer handles both orientations
+            if (imw != epd_w or imh != epd_h) and (imw != epd_h or imh != epd_w):
                 logger.warning(f"Image size {imw}x{imh} != EPD size {epd_w}x{epd_h}, resizing")
                 image = image.resize((epd_w, epd_h))
 

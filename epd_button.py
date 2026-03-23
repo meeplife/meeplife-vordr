@@ -96,12 +96,14 @@ class EPDButtonListener:
             logger.error(f"KEY1 swap trigger failed: {e}")
 
     def _on_key2(self):
-        """KEY2: Flip screen upside down (toggle)."""
-        self.flip_screen = not self.flip_screen
-        # Also toggle the shared_data screen_reversed so it takes effect immediately
-        self.shared_data.screen_reversed = not self.shared_data.screen_reversed
-        self.shared_data.web_screen_reversed = self.shared_data.screen_reversed
-        logger.info(f"Button KEY2: Flip screen {'ON' if self.flip_screen else 'OFF'}")
+        """KEY2: Cycle display rotation (0° → 90° → 180° → 270°)."""
+        _rotations = [0, 90, 180, 270]
+        current = getattr(self.shared_data, 'screen_reversed', 0) or 0
+        idx = _rotations.index(current) if current in _rotations else 0
+        new_rotation = _rotations[(idx + 1) % len(_rotations)]
+        self.shared_data.screen_reversed = new_rotation
+        self.shared_data.web_screen_reversed = new_rotation
+        logger.info(f"Button KEY2: Display rotation set to {new_rotation}°")
 
     def _on_key3(self):
         """KEY3: Next page - rotate through all pages."""

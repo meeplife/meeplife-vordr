@@ -27,6 +27,13 @@ from comment import Commentaireia
 from logger import Logger
 import subprocess  
 
+# Map rotation angle → PIL transpose operation
+_ROTATION_TRANSPOSE = {
+    90:  Image.Transpose.ROTATE_90,
+    180: Image.Transpose.ROTATE_180,
+    270: Image.Transpose.ROTATE_270,
+}
+
 logger = Logger(name="display.py", level=logging.DEBUG)
 
 # Import button listener (only functional on Pi with GPIO)
@@ -2137,12 +2144,14 @@ class Display:
 
                 if current_page != PAGE_MAIN:
                     # Non-main pages are fully rendered above, skip to display
-                    if self.screen_reversed:
-                        image = image.transpose(Image.Transpose.ROTATE_180)
+                    if self.screen_reversed and self.screen_reversed in _ROTATION_TRANSPOSE:
+                        image = image.transpose(_ROTATION_TRANSPOSE[self.screen_reversed])
                     self.epd_helper.display_partial(image)
                     self.epd_helper.display_partial(image)
-                    if self.web_screen_reversed:
-                        image = image.transpose(Image.Transpose.ROTATE_180)
+                    if self.web_screen_reversed and self.web_screen_reversed in _ROTATION_TRANSPOSE:
+                        inverse = (360 - self.web_screen_reversed) % 360
+                        if inverse in _ROTATION_TRANSPOSE:
+                            image = image.transpose(_ROTATION_TRANSPOSE[inverse])
                     with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
                         image.save(img_file)
                         img_file.flush()
@@ -2253,14 +2262,16 @@ class Display:
                     draw.text((int(4 * sx), y_text), line, font=self.shared_data.font_arialbold, fill=0)
                     y_text += (self.shared_data.font_arialbold.getbbox(line)[3] - self.shared_data.font_arialbold.getbbox(line)[1]) + 3
 
-                if self.screen_reversed:
-                    image = image.transpose(Image.Transpose.ROTATE_180)
+                if self.screen_reversed and self.screen_reversed in _ROTATION_TRANSPOSE:
+                    image = image.transpose(_ROTATION_TRANSPOSE[self.screen_reversed])
 
                 self.epd_helper.display_partial(image)
                 self.epd_helper.display_partial(image)
 
-                if self.web_screen_reversed:
-                    image = image.transpose(Image.Transpose.ROTATE_180)
+                if self.web_screen_reversed and self.web_screen_reversed in _ROTATION_TRANSPOSE:
+                    inverse = (360 - self.web_screen_reversed) % 360
+                    if inverse in _ROTATION_TRANSPOSE:
+                        image = image.transpose(_ROTATION_TRANSPOSE[inverse])
                 with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
                     image.save(img_file)
                     img_file.flush()

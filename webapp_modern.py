@@ -1034,9 +1034,11 @@ def _show_epaper_transition(message: str) -> None:
         draw.text((10, width // 2 - 20), message, font=font, fill=0)
         draw.text((10, width // 2 + 5), "Please wait...", font=font_small, fill=0)
 
-        # Handle screen flip
-        if shared_data.config.get('screen_reversed', False):
-            image = image.rotate(180)
+        # Handle screen rotation
+        from shared import normalize_rotation
+        _rotation = normalize_rotation(shared_data.config.get('screen_reversed', 0))
+        if _rotation:
+            image = image.rotate(_rotation, expand=True)
 
         epd_helper.display_full(image)
         logger.info(f"E-paper transition: {message}")
@@ -2989,7 +2991,8 @@ def update_config():
         shared_data.save_config()
 
         # Reflect orientation changes immediately for both hardware and screenshots
-        shared_data.screen_reversed = bool(shared_data.config.get('screen_reversed', False))
+        from shared import normalize_rotation
+        shared_data.screen_reversed = normalize_rotation(shared_data.config.get('screen_reversed', 0))
         shared_data.web_screen_reversed = shared_data.screen_reversed
         
         # Reload AI service if ai_enabled was changed
