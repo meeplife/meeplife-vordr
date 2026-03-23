@@ -34,6 +34,47 @@ _ROTATION_TRANSPOSE = {
     270: Image.Transpose.ROTATE_270,
 }
 
+
+def _render_dimensions(width, height, rotation):
+    """Return (render_w, render_h) for the given rotation.
+
+    For 90°/270° the render canvas is portrait (swapped) so that the
+    e-paper getbuffer 'Vertical' path maps it correctly to the landscape
+    display buffer.  For 0°/180° dimensions stay as-is.
+    """
+    if rotation in (90, 270):
+        return height, width
+    return width, height
+
+
+def _apply_epd_rotation(image, rotation):
+    """Apply rotation for the EPD hardware path.
+
+    * 0°   – no-op
+    * 180° – PIL ROTATE_180 (same dims, horizontal getbuffer path)
+    * 90°  – no-op (image is already portrait, getbuffer vertical handles it)
+    * 270° – PIL ROTATE_180 (flips the portrait image, getbuffer vertical gives opposite orientation)
+    """
+    if rotation == 180:
+        return image.transpose(Image.Transpose.ROTATE_180)
+    if rotation == 270:
+        return image.transpose(Image.Transpose.ROTATE_180)
+    return image
+
+
+def _apply_web_rotation(image, rotation):
+    """Apply rotation for the web preview PNG.
+
+    The web preview should match what the user physically sees on the display.
+    * 0°   – landscape, show as-is
+    * 90°  – portrait, show as-is (getbuffer + physical mount cancel)
+    * 180° – landscape upside-down
+    * 270° – portrait upside-down (getbuffer + physical mount cancel, image was flipped)
+    """
+    if rotation in (180, 270):
+        return image.transpose(Image.Transpose.ROTATE_180)
+    return image
+
 logger = Logger(name="display.py", level=logging.DEBUG)
 
 # Import button listener (only functional on Pi with GPIO)
@@ -485,9 +526,11 @@ class Display:
 
     def render_wifi_wave_indicator(self, image, draw):
         """Render a live Wi-Fi indicator using wave arcs with no dBm text."""
-        base_x = int(3 * self.scale_factor_x)
-        base_y = int(8 * self.scale_factor_y)
-        scale = min(self.scale_factor_x, self.scale_factor_y)
+        _sx = getattr(self, 'render_sx', self.scale_factor_x)
+        _sy = getattr(self, 'render_sy', self.scale_factor_y)
+        base_x = int(3 * _sx)
+        base_y = int(8 * _sy)
+        scale = min(_sx, _sy)
         signal_dbm = getattr(self.shared_data, 'wifi_signal_dbm', None)
         raw_quality = getattr(self.shared_data, 'wifi_signal_quality', None)
         effective_quality = raw_quality if raw_quality is not None else self._dbm_to_quality(signal_dbm)
@@ -517,7 +560,7 @@ class Display:
 
         if ip_last_octet:
             text_x = center_x + wave_spacing + base_radius
-            text_y = center_y - base_radius - max(1, int(6 * self.scale_factor_y))
+            text_y = center_y - base_radius - max(1, int(6 * _sy))
             draw.text((text_x, text_y), ip_last_octet, font=self.shared_data.font_arial9, fill=0)
 
     def get_wifi_ip_last_octet(self):
@@ -738,10 +781,10 @@ class Display:
 
     def _draw_page_frame(self, draw, title):
         """Draw standard page frame: border, title, divider, footer."""
-        w = self.shared_data.width
-        h = self.shared_data.height
-        sx = self.scale_factor_x
-        sy = self.scale_factor_y
+        w = getattr(self, 'render_w', self.shared_data.width)
+        h = getattr(self, 'render_h', self.shared_data.height)
+        sx = getattr(self, 'render_sx', self.scale_factor_x)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
         font = self.shared_data.font_arial9
         font_title = self.shared_data.font_viking
         draw.rectangle((1, 1, w - 1, h - 1), outline=0)
@@ -752,9 +795,9 @@ class Display:
 
     def _draw_stat_rows(self, draw, y, stats):
         """Draw key-value stat rows. Returns final y position."""
-        w = self.shared_data.width
-        sx = self.scale_factor_x
-        sy = self.scale_factor_y
+        w = getattr(self, 'render_w', self.shared_data.width)
+        sx = getattr(self, 'render_sx', self.scale_factor_x)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
         font = self.shared_data.font_arial9
         line_h = int(14 * sy)
         pad_x = int(6 * sx)
@@ -917,10 +960,10 @@ class Display:
     def _render_network_page(self, image, draw):
         """Render Page 2: Network Scanner - real host data from database."""
         self._draw_page_frame(draw, "NETWORK SCAN")
-        w = self.shared_data.width
-        h = self.shared_data.height
-        sx = self.scale_factor_x
-        sy = self.scale_factor_y
+        w = getattr(self, 'render_w', self.shared_data.width)
+        h = getattr(self, 'render_h', self.shared_data.height)
+        sx = getattr(self, 'render_sx', self.scale_factor_x)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
         font = self.shared_data.font_arial9
         sd = self.shared_data
         y = int(28 * sy)
@@ -970,10 +1013,10 @@ class Display:
     def _render_vuln_page(self, image, draw):
         """Render Page 3: Vulnerability Scanner - real scan intel from files."""
         self._draw_page_frame(draw, "VULN INTEL")
-        w = self.shared_data.width
-        h = self.shared_data.height
-        sx = self.scale_factor_x
-        sy = self.scale_factor_y
+        w = getattr(self, 'render_w', self.shared_data.width)
+        h = getattr(self, 'render_h', self.shared_data.height)
+        sx = getattr(self, 'render_sx', self.scale_factor_x)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
         font = self.shared_data.font_arial9
         sd = self.shared_data
         y = int(28 * sy)
@@ -1016,10 +1059,10 @@ class Display:
     def _render_discovered_page(self, image, draw):
         """Render Page 4: Discovered - real credentials, loot, and attack data."""
         self._draw_page_frame(draw, "DISCOVERED")
-        w = self.shared_data.width
-        h = self.shared_data.height
-        sx = self.scale_factor_x
-        sy = self.scale_factor_y
+        w = getattr(self, 'render_w', self.shared_data.width)
+        h = getattr(self, 'render_h', self.shared_data.height)
+        sx = getattr(self, 'render_sx', self.scale_factor_x)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
         font = self.shared_data.font_arial9
         y = int(28 * sy)
 
@@ -1056,10 +1099,10 @@ class Display:
     def _render_advanced_page(self, image, draw):
         """Render Page 5: Advanced Vuln Scanner - real scanner status and findings."""
         self._draw_page_frame(draw, "ADV SCANNER")
-        w = self.shared_data.width
-        h = self.shared_data.height
-        sx = self.scale_factor_x
-        sy = self.scale_factor_y
+        w = getattr(self, 'render_w', self.shared_data.width)
+        h = getattr(self, 'render_h', self.shared_data.height)
+        sx = getattr(self, 'render_sx', self.scale_factor_x)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
         font = self.shared_data.font_arial9
         y = int(28 * sy)
         line_h = int(14 * sy)
@@ -1133,9 +1176,9 @@ class Display:
     def _render_traffic_page(self, image, draw):
         """Render Page 6: Traffic Analysis - real capture data."""
         self._draw_page_frame(draw, "TRAFFIC")
-        w = self.shared_data.width
-        h = self.shared_data.height
-        sy = self.scale_factor_y
+        w = getattr(self, 'render_w', self.shared_data.width)
+        h = getattr(self, 'render_h', self.shared_data.height)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
         font = self.shared_data.font_arial9
         y = int(28 * sy)
 
@@ -2120,9 +2163,25 @@ class Display:
                 self.screen_reversed = self.shared_data.screen_reversed
                 self.web_screen_reversed = self.shared_data.web_screen_reversed
                 self.display_comment(self.shared_data.ragnarorch_status)
-                image = Image.new('1', (self.shared_data.width, self.shared_data.height))
+
+                # Compute render dimensions — portrait for 90°/270°
+                render_w, render_h = _render_dimensions(
+                    self.shared_data.width, self.shared_data.height, self.screen_reversed)
+                # Store for sub-page renderers
+                self.render_w = render_w
+                self.render_h = render_h
+                ref_w = self.shared_data.config.get('ref_width', 122)
+                ref_h = self.shared_data.config.get('ref_height', 250)
+                if self.screen_reversed in (90, 270):
+                    self.render_sx = render_w / ref_w
+                    self.render_sy = render_h / ref_h
+                else:
+                    self.render_sx = self.scale_factor_x
+                    self.render_sy = self.scale_factor_y
+
+                image = Image.new('1', (render_w, render_h))
                 draw = ImageDraw.Draw(image)
-                draw.rectangle((0, 0, self.shared_data.width, self.shared_data.height), fill=255)
+                draw.rectangle((0, 0, render_w, render_h), fill=255)
 
                 # Check if button listener wants a different page
                 current_page = PAGE_MAIN
@@ -2144,16 +2203,12 @@ class Display:
 
                 if current_page != PAGE_MAIN:
                     # Non-main pages are fully rendered above, skip to display
-                    if self.screen_reversed and self.screen_reversed in _ROTATION_TRANSPOSE:
-                        image = image.transpose(_ROTATION_TRANSPOSE[self.screen_reversed])
-                    self.epd_helper.display_partial(image)
-                    self.epd_helper.display_partial(image)
-                    if self.web_screen_reversed and self.web_screen_reversed in _ROTATION_TRANSPOSE:
-                        inverse = (360 - self.web_screen_reversed) % 360
-                        if inverse in _ROTATION_TRANSPOSE:
-                            image = image.transpose(_ROTATION_TRANSPOSE[inverse])
+                    epd_img = _apply_epd_rotation(image, self.screen_reversed)
+                    self.epd_helper.display_partial(epd_img)
+                    self.epd_helper.display_partial(epd_img)
+                    web_img = _apply_web_rotation(image, self.web_screen_reversed)
                     with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
-                        image.save(img_file)
+                        web_img.save(img_file)
                         img_file.flush()
                         os.fsync(img_file.fileno())
                     self._sleep_interruptible(current_page)
@@ -2161,11 +2216,17 @@ class Display:
 
                 # === PAGE_MAIN: Default Ragnar display ===
                 # Scale factors spread positions across the full physical canvas
-                # (e.g. 176x264 for 2.7") while icons stay at original pixel size.
-                W = self.shared_data.width   # physical width  (176 or 122)
-                H = self.shared_data.height  # physical height (264 or 250)
-                sx = self.scale_factor_x     # 1.44 on 2.7", 1.0 on 2.13"
-                sy = self.scale_factor_y     # 1.056 on 2.7", 1.0 on 2.13"
+                # For 90°/270° we render in portrait so W < H.
+                W = render_w
+                H = render_h
+                ref_w = self.shared_data.config.get('ref_width', 122)
+                ref_h = self.shared_data.config.get('ref_height', 250)
+                if self.screen_reversed in (90, 270):
+                    sx = render_w / ref_w   # portrait: 480/122 ≈ 3.93
+                    sy = render_h / ref_h   # portrait: 800/250 = 3.2
+                else:
+                    sx = self.scale_factor_x
+                    sy = self.scale_factor_y
 
                 # Check PiSugar once per frame for title sizing + battery text
                 _pisugar_available = False
@@ -2263,17 +2324,16 @@ class Display:
                     y_text += (self.shared_data.font_arialbold.getbbox(line)[3] - self.shared_data.font_arialbold.getbbox(line)[1]) + 3
 
                 if self.screen_reversed and self.screen_reversed in _ROTATION_TRANSPOSE:
-                    image = image.transpose(_ROTATION_TRANSPOSE[self.screen_reversed])
+                    epd_img = _apply_epd_rotation(image, self.screen_reversed)
+                else:
+                    epd_img = image
 
-                self.epd_helper.display_partial(image)
-                self.epd_helper.display_partial(image)
+                self.epd_helper.display_partial(epd_img)
+                self.epd_helper.display_partial(epd_img)
 
-                if self.web_screen_reversed and self.web_screen_reversed in _ROTATION_TRANSPOSE:
-                    inverse = (360 - self.web_screen_reversed) % 360
-                    if inverse in _ROTATION_TRANSPOSE:
-                        image = image.transpose(_ROTATION_TRANSPOSE[inverse])
+                web_img = _apply_web_rotation(image, self.web_screen_reversed)
                 with open(os.path.join(self.shared_data.webdir, "screen.png"), 'wb') as img_file:
-                    image.save(img_file)
+                    web_img.save(img_file)
                     img_file.flush()
                     os.fsync(img_file.fileno())
 
